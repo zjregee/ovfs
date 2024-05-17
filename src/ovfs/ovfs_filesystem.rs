@@ -3,20 +3,22 @@ use std::sync::RwLock;
 use std::time::SystemTime;
 
 use opendal::Buffer;
+use opendal::Operator;
+use sharded_slab::Slab;
 
 use super::*;
 use super::utils::*;
 
 pub struct OVFSFilesystem {
-    core: opendal::Operator,
-    opened_inodes: sharded_slab::Slab<RwLock<InodeData>>,
+    core: Operator,
+    opened_inodes: Slab<RwLock<InodeData>>,
 }
 
 impl OVFSFilesystem {
-    pub fn new(core: opendal::Operator) -> OVFSFilesystem {
+    pub fn new(core: Operator) -> OVFSFilesystem {
         OVFSFilesystem {
             core,
-            opened_inodes: sharded_slab::Slab::new()
+            opened_inodes: Slab::new()
         }
     }
 
