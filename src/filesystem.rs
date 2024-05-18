@@ -4,6 +4,7 @@ use std::ffi::CStr;
 use std::time::Duration;
 
 use crate::placeholder::*;
+use crate::file_traits::*;
 
 pub struct Entry {
     pub ino: u64,
@@ -25,9 +26,9 @@ pub trait DirectoryIterator {
 }
 
 pub trait ZeroCopyReader {
-    fn read_to(&mut self, f: &File, count: usize, off: u64) -> io::Result<usize>;
+    fn read_to(&mut self, f: &BufferWrapper, count: usize, off: u64) -> io::Result<usize>;
 
-    fn read_exact_to(&mut self, f: &mut File, mut count: usize, mut off: u64) -> io::Result<()> {
+    fn read_exact_to(&mut self, f: &mut BufferWrapper, mut count: usize, mut off: u64) -> io::Result<()> {
         let c = count
             .try_into()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -56,7 +57,7 @@ pub trait ZeroCopyReader {
         Ok(())
     }
 
-    fn copy_to_end(&mut self, f: &mut File, mut off: u64) -> io::Result<usize> {
+    fn copy_to_end(&mut self, f: &mut BufferWrapper, mut off: u64) -> io::Result<usize> {
         let mut out = 0;
         loop {
             match self.read_to(f, usize::MAX, off) {
@@ -73,9 +74,9 @@ pub trait ZeroCopyReader {
 }
 
 pub trait ZeroCopyWriter {
-    fn write_from(&mut self, f: &File, count: usize, off: u64) -> io::Result<usize>;
+    fn write_from(&mut self, f: &BufferWrapper, count: usize, off: u64) -> io::Result<usize>;
 
-    fn write_all_from(&mut self, f: &mut File, mut count: usize, mut off: u64) -> io::Result<()> {
+    fn write_all_from(&mut self, f: &mut BufferWrapper, mut count: usize, mut off: u64) -> io::Result<()> {
         let c = count
             .try_into()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -104,7 +105,7 @@ pub trait ZeroCopyWriter {
         Ok(())
     }
 
-    fn copy_to_end(&mut self, f: &mut File, mut off: u64) -> io::Result<usize> {
+    fn copy_to_end(&mut self, f: &mut BufferWrapper, mut off: u64) -> io::Result<usize> {
         let mut out = 0;
         loop {
             match self.write_from(f, usize::MAX, off) {

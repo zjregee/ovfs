@@ -8,5 +8,7 @@ libc = "0.2.153"
 bitflags = "2.5.0"
 futures = "0.3.30"
 sharded-slab = "0.1.7"
+virtio-queue = "0.12.0"
 opendal = { version = "0.46.0", features = ["services-fs"] }
 tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread"] }
+vm-memory = { version = "0.14.1", features = ["backend-mmap", "backend-atomic"] }
