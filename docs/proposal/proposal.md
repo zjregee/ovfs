@@ -39,7 +39,7 @@ This chapter serves as an introduction to the overall structure of the project, 
 
 ### 5.1 The Architecture of OVFS
 
-<img src="./media/OVFS Architecture.png" alt="OVFS Architecture" style="zoom:50%;" />
+<img src="./media/architecture.png" alt="OVFS Architecture" style="zoom:50%;" />
 
 The picture above is the OVFS architecture diagram. OVFS is a file system implementation based on the VirtioFS protocol and OpenDAL. It serves as a bridge for semantic access to file system interfaces between VMs and external storage systems. Leveraging the multiple service access capabilities and unified abstraction provided by OpenDAL, OVFS can conveniently mount shared directories in VMs on various existing distributed storage services.
 
