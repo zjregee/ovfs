@@ -1,5 +1,4 @@
 use std::io;
-use std::fs::File;
 use std::ffi::CStr;
 use std::time::Duration;
 
@@ -259,7 +258,7 @@ pub trait FileSystem {
         ctx: Context,
         parent: Self::Inode,
         name: &CStr,
-    ) -> io::Result<Entry> {
+    ) -> io::Result<()> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
 

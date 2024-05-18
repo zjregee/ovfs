@@ -1,6 +1,8 @@
 use std::time::Duration;
 use std::collections::HashMap;
 
+use super::consts::*;
+
 #[derive(Debug)]
 pub struct Config {
     /// How long the FUSE client should consider file and directory attributes to be valid.
@@ -16,8 +18,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            attr_timeout: Duration::from_secs(5),
-            entry_timeout: Duration::from_secs(5),
+            attr_timeout: DEFAULT_ATTR_TIMEOUT,
+            entry_timeout: DEFAULT_ENTRY_TIMEOUT,
             root_dir: String::from("/"),
             enabled_log: true,
         }

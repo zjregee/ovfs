@@ -1,35 +1,38 @@
-pub mod utils;
-pub mod config;
-pub mod ovfs_filesystem;
+mod types;
+mod utils;
+mod config;
+mod consts;
+mod ovfs_filesystem;
 
-#[derive(Clone)]
-enum InodeType {
-    DIR,
-    FILE,
-    Unknown,
+use types::*;
+use crate::filesystem;
+
+pub struct ReadDir {
+    data: Vec<InodeData>,
+    index: usize,
 }
 
-struct InodeKey(usize);
-
-impl InodeKey {
-    fn to_inode(self) -> u64 {
-        self.0 as u64 + 1
+impl ReadDir {
+    pub fn new(data: Vec<InodeData>) -> ReadDir {
+        ReadDir {
+            data,
+            index: 0,
+        }
     }
 }
 
-#[derive(Clone)]
-struct InodeData {
-    mode: InodeType,
-    path: String,
-    stat: libc::stat64,
-}
-
-struct Error(i32);
-
-impl From<i32> for Error {
-    fn from(value: i32) -> Error {
-        Error(value)
+impl filesystem::DirectoryIterator for ReadDir {
+    fn next(&mut self) -> Option<filesystem::DirEntry> {
+        if self.index >= self.data.len() {
+            None
+        } else {
+            let data = self.data[self.index].clone();
+            Some(filesystem::DirEntry {
+                ino: 0,
+                type_: 0,
+                offset: 0,
+                name: data.path,
+            })
+        }
     }
 }
-
-type Result<T> = std::result::Result<T, Error>;

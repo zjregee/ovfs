@@ -10,6 +10,18 @@ pub struct BufferWrapper {
     buffer: RefCell<opendal::Buffer>,
 }
 
+impl BufferWrapper {
+    pub fn new(buffer: opendal::Buffer) -> BufferWrapper {
+        BufferWrapper {
+            buffer: RefCell::new(buffer),
+        }
+    }
+
+    pub fn get_buffer(&self) -> opendal::Buffer {
+        return self.buffer.borrow().clone()
+    }
+}
+
 pub trait FileReadWriteAtVolatile<B: BitmapSlice> {
     fn read_vectored_at_volatile(&self, bufs: &[&VolatileSlice<B>], offset: u64) -> Result<usize>;
     fn write_vectored_at_volatile(&self, bufs: &[&VolatileSlice<B>], offset: u64) -> Result<usize>;

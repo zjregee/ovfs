@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use super::*;
+use super::types::*;
 
 pub fn opendal_error2error(error: opendal::Error) -> Error {
     match error.kind() {
@@ -10,7 +10,7 @@ pub fn opendal_error2error(error: opendal::Error) -> Error {
     }
 }
 
-pub fn opendal_metadata2stat64(metadata: opendal::Metadata, atime: SystemTime) -> InodeData {
+pub fn opendal_metadata2stat64(metadata: &opendal::Metadata, atime: SystemTime) -> InodeData {
     let _ = metadata.last_modified().map(|t| t.into()).unwrap_or(atime);
     let _ = opendal_enrty_mode2inode_type(metadata.mode());
     unimplemented!()
