@@ -1,12 +1,13 @@
+use std::io;
 use std::time::SystemTime;
 
-use super::types::*;
+use super::*;
 
-pub fn opendal_error2error(error: opendal::Error) -> Error {
+pub fn opendal_error2error(error: opendal::Error) -> io::Error {
     match error.kind() {
-        opendal::ErrorKind::Unsupported => Error::from(libc::EOPNOTSUPP),
-        opendal::ErrorKind::NotFound => Error::from(libc::ENOENT),
-        _ => Error::from(libc::ENOENT),
+        opendal::ErrorKind::Unsupported => io::Error::from_raw_os_error(libc::EOPNOTSUPP),
+        opendal::ErrorKind::NotFound => io::Error::from_raw_os_error(libc::ENOENT),
+        _ => io::Error::from_raw_os_error(libc::ENOENT),
     }
 }
 
