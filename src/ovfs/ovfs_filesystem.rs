@@ -5,10 +5,11 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
-use opendal::Buffer;
-use opendal::Operator;
 use sharded_slab::Slab;
+use opendal::services::Fs;
 use tokio::runtime::Runtime;
+use opendal::{Buffer, Operator};
+
 
 use super::*;
 use super::utils::*;
@@ -32,6 +33,23 @@ impl OVFSFileSystem {
             core,
             rt: Runtime::new().unwrap(),
             config: Config::default(),
+            opened_inodes: Slab::default(),
+            opened_inodes_map: RwLock::new(HashMap::default()),
+        }
+    }
+
+    pub fn new_with_config(config: Config) -> OVFSFileSystem {
+        // Only support fs for now
+        let mut builder = Fs::default();
+        builder.root(&config.root_dir);
+        let core = Operator::new(builder)
+            .expect("failed to build operator")
+            .finish();
+
+        OVFSFileSystem {
+            core,
+            config,
+            rt: Runtime::new().unwrap(),
             opened_inodes: Slab::default(),
             opened_inodes_map: RwLock::new(HashMap::default()),
         }
@@ -103,8 +121,8 @@ impl OVFSFileSystem {
             .await
             .map_err(opendal_error2error)?;
 
-        let now = SystemTime::now();
-        let attr = opendal_metadata2stat64(&metadata, now);
+        let _ = SystemTime::now();
+        let attr = opendal_metadata2stat64(path, &metadata);
 
         Ok(attr)
     }
@@ -167,7 +185,7 @@ impl OVFSFileSystem {
     }
 
     async fn do_readdir(&self, path: &str) -> io::Result<Vec<InodeData>> {
-        let now = SystemTime::now();
+        let _ = SystemTime::now();
 
         let children = self
             .core
@@ -175,7 +193,7 @@ impl OVFSFileSystem {
             .await
             .map_err(opendal_error2error)?
             .into_iter()
-            .map(|e| opendal_metadata2stat64(e.metadata(), now))
+            .map(|e| opendal_metadata2stat64(path, e.metadata()))
             .collect();
 
         Ok(children)
@@ -250,7 +268,7 @@ impl FileSystem for OVFSFileSystem {
             Ok(name) => name,
             Err(_) => Err(io::Error::from_raw_os_error(libc::EBADF))?,
         };
-        let path = self.build_path(name);
+        let path = self.build_path(name); // need modify
         self.rt.block_on(self.do_create_file(&path))?;
         let data = InodeData::new(InodeType::FILE, &path);
         let ino = self.insert_opened_inode(data.clone())?;
@@ -476,8 +494,8 @@ mod tests {
         ovfs.delete_opened(path);
         assert_eq!(ovfs.get_opened(path), None);
 
-        let dir_inode_path = "/test_dir";
-        let file_inode_path = "/test_dir/test_file";
+        let dir_inode_path = "/test_dir/";
+        let file_inode_path = "/test_file";
         let mut dir_inode_data = InodeData::new(InodeType::DIR, dir_inode_path);
         let mut file_inode_data = InodeData::new(InodeType::FILE, file_inode_path);
         assert_eq!(ovfs.insert_opened_inode(dir_inode_data.clone()).ok(), Some(0));
@@ -509,6 +527,17 @@ mod tests {
             .expect("failed to build operator")
             .finish();
         let ovfs = OVFSFileSystem::new(operator);
+
+        let dir_inode_path = "/test_dir/";
+        let file_inode_path = "/test_file";
+        assert!(ovfs.rt.block_on( ovfs.do_create_dir(dir_inode_path)).is_ok());
+        assert!(ovfs.rt.block_on( ovfs.do_create_file(file_inode_path)).is_ok());
+        assert!(matches!(ovfs.rt.block_on( ovfs.do_get_stat(dir_inode_path)), Ok(ref inode_data) if inode_data.inode_type == InodeType::DIR));
+        assert!(matches!(ovfs.rt.block_on( ovfs.do_get_stat(file_inode_path)), Ok(ref inode_data) if inode_data.inode_type == InodeType::FILE));
+        assert!(ovfs.rt.block_on( ovfs.do_delete_dir(dir_inode_path)).is_ok());
+        assert!(ovfs.rt.block_on( ovfs.do_delete_file(file_inode_path)).is_ok());
+        assert!(ovfs.rt.block_on( ovfs.do_get_stat(dir_inode_path)).is_err());
+        assert!(ovfs.rt.block_on( ovfs.do_get_stat(file_inode_path)).is_err());
 
         fs::remove_dir_all(&test_dir).expect("failed to remove test dir");
     }

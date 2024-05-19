@@ -1,5 +1,4 @@
 use std::io;
-use std::time::SystemTime;
 
 use super::*;
 
@@ -11,16 +10,12 @@ pub fn opendal_error2error(error: opendal::Error) -> io::Error {
     }
 }
 
-pub fn opendal_metadata2stat64(metadata: &opendal::Metadata, atime: SystemTime) -> InodeData {
-    let _ = metadata.last_modified().map(|t| t.into()).unwrap_or(atime);
-    let _ = opendal_enrty_mode2inode_type(metadata.mode());
-    unimplemented!()
-}
-
-pub fn opendal_enrty_mode2inode_type(entry_mode: opendal::EntryMode) -> InodeType {
-    match entry_mode {
+pub fn opendal_metadata2stat64(path: &str, metadata: &opendal::Metadata) -> InodeData {
+    let inode_type = match metadata.mode() {
         opendal::EntryMode::DIR => InodeType::DIR,
         opendal::EntryMode::FILE => InodeType::FILE,
         opendal::EntryMode::Unknown => InodeType::Unknown,
-    }
+    };
+    let inode_data = InodeData::new(inode_type, path);
+    inode_data
 }
