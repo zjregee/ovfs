@@ -22,4 +22,4 @@ qemu-system-x86_64 -M pc -cpu host --enable-kvm -smp 8 \
      -chardev stdio,mux=on,id=mon -mon chardev=mon,mode=readline -device virtio-serial-pci -device virtconsole,chardev=mon -vga none -display none \
      -drive if=virtio,file=ubuntu.qcow2
 
-mount -t virtiofs myfs /mnt
+sudo mount -t virtiofs myfs /mnt
