@@ -24,4 +24,5 @@ sudo rm -rf /mnt/ubuntu-iso
 
 qemu-system-x86_64 -enable-kvm -smp 8 -m 16G \
     -drive file=image.img,format=raw,cache=none,if=virtio \
+    -net user,hostfwd=tcp::2222-:22 -net nic \
     -nographic -boot c
