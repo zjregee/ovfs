@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
-sudo apt install cloud-image-utils
+sudo apt-get update
+sudo apt-get install cloud-image-utils
+sudo apt-get install qemu qemu-kvm
+
 cloud-localds seed.iso user-data meta-data
 
 wget https://releases.ubuntu.com/20.04/ubuntu-20.04.6-live-server-amd64.iso
