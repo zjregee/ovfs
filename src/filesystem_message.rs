@@ -2,8 +2,6 @@ use vm_memory::ByteValued;
 
 use crate::error::*;
 
-/// Opcode represents the filesystem call that needs to be executed by VMs message.
-/// The corresponding value needs to be aligned with the specification.
 #[non_exhaustive]
 pub enum Opcode {
     Init = 26,
@@ -20,11 +18,6 @@ impl TryFrom<u32> for Opcode {
     }
 }
 
-/// InHeader represents the incoming message header in the filesystem call.
-///
-/// The fields of the struct need to conform to the specific format of the virtiofs message.
-/// Currently, we only need to align them exactly with virtiofsd.
-/// Reference: https://gitlab.com/virtio-fs/virtiofsd/-/blob/main/src/fuse.rs?ref_type=heads#L1155
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct InHeader {
@@ -39,11 +32,6 @@ pub struct InHeader {
     pub padding: u16,
 }
 
-/// OutHeader represents the message header returned in the filesystem call.
-///
-/// The fields of the struct need to conform to the specific format of the virtiofs message.
-/// Currently, we only need to align them exactly with virtiofsd.
-/// Reference: https://gitlab.com/virtio-fs/virtiofsd/-/blob/main/src/fuse.rs?ref_type=heads#L1170
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OutHeader {
@@ -52,11 +40,6 @@ pub struct OutHeader {
     pub unique: u64,
 }
 
-/// InitIn is used to parse the parameters passed in the Init filesystem call.
-///
-/// The fields of the struct need to conform to the specific format of the virtiofs message.
-/// Currently, we only need to align them exactly with virtiofsd.
-/// Reference: https://gitlab.com/virtio-fs/virtiofsd/-/blob/main/src/fuse.rs?ref_type=heads#L1030
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct InitIn {
@@ -66,11 +49,6 @@ pub struct InitIn {
     pub flags: u32,
 }
 
-/// InitOut is used to return the result of the Init filesystem call.
-///
-/// The fields of the struct need to conform to the specific format of the virtiofs message.
-/// Currently, we only need to align them exactly with virtiofsd.
-/// Reference: https://gitlab.com/virtio-fs/virtiofsd/-/blob/main/src/fuse.rs?ref_type=heads#L1048
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct InitOut {
@@ -88,8 +66,6 @@ pub struct InitOut {
     pub unused: [u32; 7],
 }
 
-/// We will use ByteValued to implement the encoding and decoding
-/// of these structures in shared memory.
 unsafe impl ByteValued for InHeader {}
 unsafe impl ByteValued for OutHeader {}
 unsafe impl ByteValued for InitIn {}
