@@ -1,10 +1,13 @@
+use std::collections::VecDeque;
 use std::io;
 use std::ops::Deref;
-use std::collections::VecDeque;
 
 use virtio_queue::DescriptorChain;
 use vm_memory::bitmap::{Bitmap, BitmapSlice};
-use vm_memory::{Address, GuestMemory, GuestMemoryMmap, GuestMemoryRegion, VolatileMemory, VolatileMemoryError, VolatileSlice};
+use vm_memory::{
+    Address, GuestMemory, GuestMemoryMmap, GuestMemoryRegion, VolatileMemory, VolatileMemoryError,
+    VolatileSlice,
+};
 
 use crate::file_traits::FileReadWriteAtVolatile;
 
@@ -20,7 +23,10 @@ impl std::fmt::Display for Error {
         use self::Error::*;
 
         match self {
-            DescriptorChainOverflow => write!(f, "the combined length of all the buffers in a `DescriptorChain` would overflow"),
+            DescriptorChainOverflow => write!(
+                f,
+                "the combined length of all the buffers in a `DescriptorChain` would overflow"
+            ),
             FindMemoryRegion => write!(f, "no memory region for this address range"),
             VolatileMemoryError(e) => write!(f, "volatile memory error: {e}"),
         }
@@ -32,7 +38,7 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Reader<'a, B = ()> {
-    buffer: DescriptorChainConsumer<'a, B>
+    buffer: DescriptorChainConsumer<'a, B>,
 }
 
 impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
@@ -45,16 +51,21 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
         M::Target: GuestMemory + Sized,
     {
         let mut len: usize = 0;
-        let buffers = desc_chain.readable()
+        let buffers = desc_chain
+            .readable()
             .map(|desc| {
-                len = len.checked_add(desc.len() as usize)
+                len = len
+                    .checked_add(desc.len() as usize)
                     .ok_or(Error::DescriptorChainOverflow)?;
-                let region = mem.find_region(desc.addr())
+                let region = mem
+                    .find_region(desc.addr())
                     .ok_or(Error::FindMemoryRegion)?;
-                let offset = desc.addr()
+                let offset = desc
+                    .addr()
                     .checked_sub(region.start_addr().raw_value())
                     .unwrap();
-                region.deref()
+                region
+                    .deref()
                     .get_slice(offset.raw_value() as usize, desc.len() as usize)
                     .map_err(Error::VolatileMemoryError)
             })
@@ -63,7 +74,7 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
             buffer: DescriptorChainConsumer {
                 buffers,
                 bytes_consumed: 0,
-            }
+            },
         })
     }
 
@@ -73,15 +84,16 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
         count: usize,
         off: u64,
     ) -> io::Result<usize> {
-        self.buffer.consume(count, |bufs| dst.write_vectored_at_volatile(bufs, off))
+        self.buffer
+            .consume(count, |bufs| dst.write_vectored_at_volatile(bufs, off))
     }
 }
 
 pub struct Writer<'a, B = ()> {
-    buffer: DescriptorChainConsumer<'a, B>
+    buffer: DescriptorChainConsumer<'a, B>,
 }
 
-impl <'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
+impl<'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
     pub fn new<M>(
         mem: &'a GuestMemoryMmap<B>,
         desc_chain: DescriptorChain<M>,
@@ -91,13 +103,19 @@ impl <'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
         M::Target: GuestMemory + Sized,
     {
         let mut len: usize = 0;
-        let buffers = desc_chain.writable()
+        let buffers = desc_chain
+            .writable()
             .map(|desc| {
-                len = len.checked_add(desc.len() as usize)
+                len = len
+                    .checked_add(desc.len() as usize)
                     .ok_or(Error::DescriptorChainOverflow)?;
-                let region = mem.find_region(desc.addr())
+                let region = mem
+                    .find_region(desc.addr())
                     .ok_or(Error::FindMemoryRegion)?;
-                let offset = desc.addr().checked_sub(region.start_addr().raw_value()).unwrap();
+                let offset = desc
+                    .addr()
+                    .checked_sub(region.start_addr().raw_value())
+                    .unwrap();
                 region
                     .deref()
                     .get_slice(offset.raw_value() as usize, desc.len() as usize)
@@ -108,7 +126,7 @@ impl <'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
             buffer: DescriptorChainConsumer {
                 buffers,
                 bytes_consumed: 0,
-            }
+            },
         })
     }
 
@@ -118,7 +136,8 @@ impl <'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
         count: usize,
         off: u64,
     ) -> io::Result<usize> {
-        self.buffer.consume(count, |bufs| src.read_vectored_at_volatile(bufs, off))
+        self.buffer
+            .consume(count, |bufs| src.read_vectored_at_volatile(bufs, off))
     }
 }
 
@@ -150,9 +169,12 @@ impl<'a, B: BitmapSlice> DescriptorChainConsumer<'a, B> {
             return Ok(0);
         }
         let bytes_consumed = f(&bufs)?;
-        let total_bytes_consumed = self.bytes_consumed
-            .checked_add(bytes_consumed)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, Error::DescriptorChainOverflow))?;
+        let total_bytes_consumed =
+            self.bytes_consumed
+                .checked_add(bytes_consumed)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, Error::DescriptorChainOverflow)
+                })?;
         let mut remain = bytes_consumed;
         while let Some(vs) = self.buffers.pop_front() {
             if remain < vs.len() {
