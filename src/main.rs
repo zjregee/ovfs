@@ -2,9 +2,10 @@ use std::io;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use opendal::services::S3;
+use opendal::Operator;
 use vhost::vhost_user::message::VhostUserProtocolFeatures;
 use vhost::vhost_user::message::VhostUserVirtioFeatures;
-use vhost::vhost_user::Backend;
 use vhost::vhost_user::Listener;
 use vhost_user_backend::VhostUserBackend;
 use vhost_user_backend::VhostUserDaemon;
@@ -14,7 +15,11 @@ use vhost_user_backend::VringT;
 use virtio_bindings::bindings::virtio_config::VIRTIO_F_VERSION_1;
 use virtio_bindings::bindings::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use virtio_bindings::bindings::virtio_ring::VIRTIO_RING_F_INDIRECT_DESC;
+use virtio_queue::DescriptorChain;
+use virtio_queue::QueueOwnedT;
+use vm_memory::GuestAddressSpace;
 use vm_memory::GuestMemoryAtomic;
+use vm_memory::GuestMemoryLoadGuard;
 use vm_memory::GuestMemoryMmap;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -32,28 +37,31 @@ mod filesystem_util;
 mod util;
 
 use crate::error::*;
+use crate::filesystem::Filesystem;
+use crate::util::Reader;
+use crate::util::Writer;
 
 const HIPRIO_QUEUE_EVENT: u16 = 0;
 const REQ_QUEUE_EVENT: u16 = 1;
-const QUEUE_SIZE: usize = 32768;
+const QUEUE_SIZE: usize = 1024;
 const REQUEST_QUEUES: usize = 1;
 const NUM_QUEUES: usize = REQUEST_QUEUES + 1;
 
 struct VhostUserFsThread {
     mem: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
-    vu_req: Option<Backend>,
+    server: Filesystem,
     event_idx: bool,
     kill_event_fd: EventFd,
 }
 
 impl VhostUserFsThread {
-    fn new() -> Result<VhostUserFsThread> {
+    fn new(fs: Filesystem) -> Result<VhostUserFsThread> {
         let event_fd = EventFd::new(libc::EFD_NONBLOCK).map_err(|err| {
             new_unexpected_error("failed to create kill eventfd", Some(err.into()))
         })?;
         Ok(VhostUserFsThread {
             mem: None,
-            vu_req: None,
+            server: fs,
             event_idx: false,
             kill_event_fd: event_fd,
         })
@@ -79,8 +87,64 @@ impl VhostUserFsThread {
         Ok(())
     }
 
-    fn process_queue_serial(&self, _vring_state: &mut VringState) -> Result<bool> {
-        unimplemented!()
+    fn process_queue_serial(&self, vring_state: &mut VringState) -> Result<bool> {
+        let mut used_any = false;
+        let mem = match &self.mem {
+            Some(m) => m.memory(),
+            None => return Err(new_unexpected_error("no memory configured", None)),
+        };
+        let avail_chains: Vec<DescriptorChain<GuestMemoryLoadGuard<GuestMemoryMmap>>> = vring_state
+            .get_queue_mut()
+            .iter(mem.clone())
+            .map_err(|_| new_unexpected_error("iterating through the queue failed", None))?
+            .collect();
+        for chain in avail_chains {
+            used_any = true;
+            let head_index = chain.head_index();
+            let reader = Reader::new(&mem, chain.clone())
+                .map_err(|_| new_unexpected_error("creating a queue reader failed", None))
+                .unwrap();
+            let writer = Writer::new(&mem, chain.clone())
+                .map_err(|_| new_unexpected_error("creating a queue writer failed", None))
+                .unwrap();
+            let len = self
+                .server
+                .handle_message(reader, writer)
+                .map_err(|_| new_unexpected_error("processing a queue writer failed", None))
+                .unwrap();
+            VhostUserFsThread::return_descriptor(vring_state, head_index, self.event_idx, len);
+        }
+        Ok(used_any)
+    }
+
+    fn return_descriptor(
+        vring_state: &mut VringState,
+        head_index: u16,
+        event_idx: bool,
+        len: usize,
+    ) {
+        let used_len: u32 = match len.try_into() {
+            Ok(l) => l,
+            Err(_) => panic!("Invalid used length, can't return used descritors to the ring"),
+        };
+        if vring_state.add_used(head_index, used_len).is_err() {
+            println!("Couldn't return used descriptors to the ring");
+        }
+        if event_idx {
+            match vring_state.needs_notification() {
+                Err(_) => {
+                    println!("Couldn't check if queue needs to be notified");
+                    vring_state.signal_used_queue().unwrap();
+                }
+                Ok(needs_notification) => {
+                    if needs_notification {
+                        vring_state.signal_used_queue().unwrap();
+                    }
+                }
+            }
+        } else {
+            vring_state.signal_used_queue().unwrap();
+        }
     }
 }
 
@@ -89,8 +153,8 @@ pub struct VhostUserFsBackend {
 }
 
 impl VhostUserFsBackend {
-    pub fn new() -> Result<VhostUserFsBackend> {
-        let thread = RwLock::new(VhostUserFsThread::new()?);
+    pub fn new(fs: Filesystem) -> Result<VhostUserFsBackend> {
+        let thread = RwLock::new(VhostUserFsThread::new(fs)?);
         Ok(VhostUserFsBackend { thread })
     }
 }
@@ -132,10 +196,6 @@ impl VhostUserBackend for VhostUserFsBackend {
         Ok(())
     }
 
-    fn set_backend_req_fd(&self, vu_req: Backend) {
-        self.thread.write().unwrap().vu_req = Some(vu_req);
-    }
-
     fn exit_event(&self, _thread_index: usize) -> Option<EventFd> {
         Some(
             self.thread
@@ -171,7 +231,17 @@ impl VhostUserBackend for VhostUserFsBackend {
 fn main() {
     let socket = "/tmp/vfsd.sock";
     let listener = Listener::new(socket, true).unwrap();
-    let fs_backend = Arc::new(VhostUserFsBackend::new().unwrap());
+    let mut builder = S3::default();
+    builder.bucket("test");
+    builder.endpoint("http://127.0.0.1:9000");
+    builder.access_key_id("minioadmin");
+    builder.secret_access_key("minioadmin");
+    builder.region("us-east-1");
+    let operator = Operator::new(builder)
+        .expect("failed to build operator")
+        .finish();
+    let fs = Filesystem::new(operator);
+    let fs_backend = Arc::new(VhostUserFsBackend::new(fs).unwrap());
     let mut daemon = VhostUserDaemon::new(
         String::from("ovfs-backend"),
         fs_backend.clone(),
