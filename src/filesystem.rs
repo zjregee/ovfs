@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::io::Write;
 use std::mem::size_of;
+use std::path::PathBuf;
 use std::sync::RwLock;
+use std::time::Duration;
 
 use opendal::{Buffer, Operator};
 use sharded_slab::Slab;
@@ -26,6 +29,18 @@ enum FileType {
 
 #[derive(Clone, Copy)]
 struct FileKey(usize);
+
+impl From<u64> for FileKey {
+    fn from(value: u64) -> Self {
+        FileKey(value as usize + 1)
+    }
+}
+
+impl FileKey {
+    fn to_nodeid(&self) -> u64 {
+        self.0 as u64 - 1
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -81,8 +96,8 @@ fn opendal_metadata2opened_file(path: &str, metadata: &opendal::Metadata) -> Ope
 pub struct Filesystem {
     rt: Runtime,
     core: Operator,
-    opened_files: Slab<RwLock<OpenedFile>>, // opened key -> opened file
-    opened_files_map: RwLock<HashMap<String, FileKey>>, // opened path -> opened key
+    opened_files: Slab<RwLock<OpenedFile>>,
+    opened_files_map: RwLock<HashMap<String, FileKey>>,
 }
 
 impl Filesystem {
@@ -111,10 +126,165 @@ impl Filesystem {
         if let Ok(opcode) = Opcode::try_from(in_header.opcode) {
             match opcode {
                 Opcode::Init => self.init(in_header, r, w),
+                Opcode::Lookup => self.lookup(in_header, r, w),
+                Opcode::Forget => self.forget(in_header, r),
+                Opcode::Getattr => self.getattr(in_header, r, w),
+                Opcode::Access => self.access(in_header, r, w),
+                Opcode::Create => self.create(in_header, r, w),
+                Opcode::Destroy => self.destory(),
             }
         } else {
             Filesystem::reply_error(in_header.unique, w)
         }
+    }
+}
+
+impl Filesystem {
+    fn init(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let InitIn { major, minor, .. } = r.read_obj().map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+
+        if major != KERNEL_VERSION || minor < MIN_KERNEL_MINOR_VERSION {
+            return Filesystem::reply_error(in_header.unique, w);
+        }
+
+        let out = InitOut {
+            major: KERNEL_VERSION,
+            minor: KERNEL_MINOR_VERSION,
+            max_write: MAX_BUFFER_SIZE,
+            ..Default::default()
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn destory(&self) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn access(&self, _in_header: InHeader, _r: Reader, _w: Writer) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn forget(&self, _in_header: InHeader, _r: Reader) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn lookup(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let mut buf = vec![0u8; in_header.len as usize];
+        r.read_exact(&mut buf).map_err(|e| {
+            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let parent_file = self.get_opened_inode(in_header.nodeid.into());
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        let path = PathBuf::from(parent_path)
+            .join(name)
+            .to_string_lossy()
+            .to_string();
+        if let Some(file_key) = self.get_opened(&path) {
+            let file = self.get_opened_inode(file_key).unwrap();
+            let out = EntryOut {
+                nodeid: file_key.to_nodeid(),
+                entry_valid: Duration::from_secs(5).as_secs(),
+                attr_valid: Duration::from_secs(5).as_secs(),
+                entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+                attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+                attr: file.stat.into(),
+            };
+            return Filesystem::reply_ok(Some(out), None, in_header.unique, w);
+        }
+        let file = match self.rt.block_on(self.do_get_stat(&path)) {
+            Ok(stat) => stat,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        let file_key = self.insert_opened_inode(file.clone());
+        self.insert_opened(&path, file_key);
+        let out = EntryOut {
+            nodeid: file_key.to_nodeid(),
+            entry_valid: Duration::from_secs(5).as_secs(),
+            attr_valid: Duration::from_secs(5).as_secs(),
+            entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            attr: file.stat.into(),
+        };
+        return Filesystem::reply_ok(Some(out), None, in_header.unique, w);
+    }
+
+    fn getattr(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
+        let file = self.get_opened_inode(in_header.nodeid.into());
+        let mut stat = match file {
+            Ok(file) => file.stat,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        stat.st_ino = in_header.nodeid;
+        let out = AttrOut {
+            attr_valid: Duration::from_secs(5).as_secs(),
+            attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            dummy: 0,
+            attr: stat.into(),
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn create(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let CreateIn { .. } = r.read_obj().map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let remaining_len = in_header.len as usize - size_of::<InHeader>() - size_of::<CreateIn>();
+        let mut buf = vec![0u8; remaining_len];
+        r.read_exact(&mut buf).map_err(|e| {
+            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let mut components = buf.split_inclusive(|c| *c == b'\0');
+        let buf = components.next().ok_or(new_unexpected_error(
+            "one or more parameters are missing",
+            None,
+        ))?;
+        let parent_file = self.get_opened_inode(in_header.nodeid.into());
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        let path = PathBuf::from(parent_path)
+            .join(name)
+            .to_string_lossy()
+            .to_string();
+        if self.rt.block_on(self.do_create_file(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w);
+        }
+        let file = OpenedFile::new(FileType::File, &path);
+        let file_key = self.insert_opened_inode(file.clone());
+        self.insert_opened(&path, file_key);
+        let mut stat = file.stat;
+        stat.st_ino = file_key.to_nodeid();
+        let entry_out = EntryOut {
+            nodeid: file_key.to_nodeid(),
+            entry_valid: Duration::from_secs(5).as_secs(),
+            attr_valid: Duration::from_secs(5).as_secs(),
+            entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            attr: stat.into(),
+        };
+        let open_out = OpenOut {
+            ..Default::default()
+        };
+        return Filesystem::reply_ok(
+            Some(entry_out),
+            Some(open_out.as_slice()),
+            in_header.unique,
+            w,
+        );
     }
 }
 
@@ -164,25 +334,11 @@ impl Filesystem {
         })?;
         Ok(w.bytes_written())
     }
-}
 
-impl Filesystem {
-    fn init(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
-        let InitIn { major, minor, .. } = r.read_obj().map_err(|e| {
+    fn bytes_to_str(buf: &[u8]) -> Result<&str> {
+        std::str::from_utf8(buf).map_err(|e| {
             new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
-
-        if major != KERNEL_VERSION || minor < MIN_KERNEL_MINOR_VERSION {
-            return Filesystem::reply_error(in_header.unique, w);
-        }
-
-        let out = InitOut {
-            major: KERNEL_VERSION,
-            minor: KERNEL_MINOR_VERSION,
-            max_write: MAX_BUFFER_SIZE,
-            ..Default::default()
-        };
-        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+        })
     }
 }
 
@@ -197,11 +353,6 @@ impl Filesystem {
         map.insert(path.to_string(), key);
     }
 
-    fn delete_opened(&self, path: &str) {
-        let mut map = self.opened_files_map.write().unwrap();
-        map.remove(path);
-    }
-
     fn get_opened_inode(&self, key: FileKey) -> Result<OpenedFile> {
         if let Some(opened_inode) = self.opened_files.get(key.0) {
             let inode_data = opened_inode.read().unwrap().clone();
@@ -211,20 +362,8 @@ impl Filesystem {
         }
     }
 
-    fn insert_opened_inode(&self, value: OpenedFile) -> Result<FileKey> {
-        if let Some(key) = self.opened_files.insert(RwLock::new(value)) {
-            Ok(FileKey(key))
-        } else {
-            Err(new_unexpected_error("too many opened files", None))
-        }
-    }
-
-    fn delete_opened_inode(&self, key: FileKey) -> Result<()> {
-        if self.opened_files.remove(key.0) {
-            Ok(())
-        } else {
-            Err(new_unexpected_error("invalid file", None))
-        }
+    fn insert_opened_inode(&self, value: OpenedFile) -> FileKey {
+        FileKey(self.opened_files.insert(RwLock::new(value)).unwrap())
     }
 }
 

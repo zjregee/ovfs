@@ -24,16 +24,9 @@ use vm_memory::GuestMemoryMmap;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-#[allow(dead_code)]
-mod descriptor_utils;
 mod error;
-#[allow(dead_code)]
-mod file_traits;
-#[allow(dead_code)]
 mod filesystem;
 mod filesystem_message;
-#[allow(dead_code)]
-mod filesystem_util;
 mod util;
 
 use crate::error::*;
@@ -249,10 +242,10 @@ fn main() {
     )
     .unwrap();
     if let Err(e) = daemon.start(listener) {
-        println!("Failed to start daemon: {}", e);
+        panic!("failed to start daemon: {:?}", e);
     }
     if let Err(e) = daemon.wait() {
-        println!("Failed to wait for daemon: {}", e);
+        panic!("failed to wait for daemon: {:?}", e);
     }
     let kill_event_fd = fs_backend
         .thread
@@ -262,6 +255,6 @@ fn main() {
         .try_clone()
         .unwrap();
     if let Err(e) = kill_event_fd.write(1) {
-        println!("Error shutting down worker thread: {:?}", e)
+        panic!("error shutting down worker thread: {:?}", e)
     }
 }

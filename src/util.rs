@@ -21,7 +21,6 @@ use vm_memory::VolatileSlice;
 
 use crate::error::*;
 
-/// Used to consume and use data areas in shared memory between host and VMs.
 struct DescriptorChainConsumer<'a, B> {
     buffers: VecDeque<VolatileSlice<'a, B>>,
     bytes_consumed: usize,
@@ -74,7 +73,6 @@ impl<'a, B: BitmapSlice> DescriptorChainConsumer<'a, B> {
     }
 }
 
-/// Provides a high-level interface for reading data in shared memory sequences.
 pub struct Reader<'a, B = ()> {
     buffer: DescriptorChainConsumer<'a, B>,
 }
@@ -152,7 +150,6 @@ impl<'a, B: BitmapSlice> io::Read for Reader<'a, B> {
     }
 }
 
-/// Provides a high-level interface for writing data in shared memory sequences.
 pub struct Writer<'a, B = ()> {
     buffer: DescriptorChainConsumer<'a, B>,
 }
