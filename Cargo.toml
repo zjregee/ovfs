@@ -6,12 +6,14 @@ edition = "2021"
 [dependencies]
 anyhow = { version = "1.0.86", features = ["std"] }
 bitflags = "2.5.0"
+env_logger = "0.11.3"
 futures = "0.3.30"
 libc = "0.2.153"
-opendal = { version = "0.47.3", features = ["services-s3"] }
+log = "0.4.22"
+opendal = { version = "0.47.3", features = ["services-fs"] }
 sharded-slab = "0.1.7"
 snafu = "0.8.3"
-tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.37.0", features = ["rt-multi-thread"] }
 vhost = "0.11.0"
 vhost-user-backend = "0.14.0"
 virtio-bindings = "0.2.1"
