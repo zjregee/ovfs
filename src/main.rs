@@ -10,6 +10,7 @@ use opendal::services::Fs;
 use opendal::Operator;
 use vhost::vhost_user::message::VhostUserProtocolFeatures;
 use vhost::vhost_user::message::VhostUserVirtioFeatures;
+use vhost::vhost_user::Backend;
 use vhost::vhost_user::Listener;
 use vhost_user_backend::VhostUserBackend;
 use vhost_user_backend::VhostUserDaemon;
@@ -46,7 +47,8 @@ const NUM_QUEUES: usize = REQUEST_QUEUES + 1;
 
 struct VhostUserFsThread {
     mem: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
-    server: Arc<Filesystem>,
+    server: Filesystem,
+    vu_req: Option<Backend>,
     event_idx: bool,
     kill_event_fd: EventFd,
 }
@@ -58,7 +60,8 @@ impl VhostUserFsThread {
         })?;
         Ok(VhostUserFsThread {
             mem: None,
-            server: Arc::new(fs),
+            server: fs,
+            vu_req: None,
             event_idx: false,
             kill_event_fd: event_fd,
         })
@@ -226,6 +229,10 @@ impl VhostUserBackend for VhostUserFsBackend {
                 .unwrap(),
         )
     }
+
+    fn set_backend_req_fd(&self, vu_req: Backend) {
+        self.thread.write().unwrap().vu_req = Some(vu_req);
+    }
 }
 
 fn main() {
@@ -251,15 +258,15 @@ fn main() {
     .unwrap();
 
     if let Err(e) = daemon.start(listener) {
-        error!("failed to start daemon: {:?}", e);
+        error!("[Main] failed to start daemon: {:?}", e);
         exit(1);
     }
-    info!("daemon started");
+    info!("[Main] daemon started");
 
     if let Err(e) = daemon.wait() {
-        error!("failed to wait for daemon: {:?}", e);
+        error!("[Main] failed to wait for daemon: {:?}", e);
     }
-    info!("daemon shutdown");
+    info!("[Main] daemon shutdown");
 
     let kill_event_fd = fs_backend
         .thread
@@ -269,7 +276,7 @@ fn main() {
         .try_clone()
         .unwrap();
     if let Err(e) = kill_event_fd.write(1) {
-        error!("failed to shutdown worker thread: {:?}", e);
+        error!("[Main] failed to shutdown worker thread: {:?}", e);
     }
-    info!("worker thread shutdown");
+    info!("[Main] worker thread shutdown");
 }

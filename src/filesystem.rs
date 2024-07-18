@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::io::Read;
 use std::io::Write;
 use std::mem::size_of;
@@ -6,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::Duration;
 
+use log::debug;
 use opendal::{Buffer, Operator};
 use sharded_slab::Slab;
 use tokio::runtime::{Builder, Runtime};
@@ -18,7 +20,7 @@ use crate::util::{Reader, Writer};
 const KERNEL_VERSION: u32 = 7;
 const KERNEL_MINOR_VERSION: u32 = 38;
 const MIN_KERNEL_MINOR_VERSION: u32 = 27;
-const BUFFER_HEADER_SIZE: u32 = 256;
+const BUFFER_HEADER_SIZE: u32 = 4096;
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
 
 enum FileType {
@@ -27,22 +29,6 @@ enum FileType {
     Unknown,
 }
 
-#[derive(Clone, Copy)]
-struct FileKey(usize);
-
-impl From<u64> for FileKey {
-    fn from(value: u64) -> Self {
-        FileKey(value as usize + 1)
-    }
-}
-
-impl FileKey {
-    fn to_nodeid(&self) -> u64 {
-        self.0 as u64 - 1
-    }
-}
-
-#[allow(dead_code)]
 #[derive(Clone)]
 struct OpenedFile {
     path: String,
@@ -97,7 +83,7 @@ pub struct Filesystem {
     rt: Runtime,
     core: Operator,
     opened_files: Slab<RwLock<OpenedFile>>,
-    opened_files_map: RwLock<HashMap<String, FileKey>>,
+    opened_files_map: RwLock<HashMap<String, usize>>,
 }
 
 impl Filesystem {
@@ -124,6 +110,10 @@ impl Filesystem {
             return Filesystem::reply_error(in_header.unique, w);
         }
         if let Ok(opcode) = Opcode::try_from(in_header.opcode) {
+            debug!(
+                "[Filesystem] received request: opcode={:?} ({}), inode={}",
+                opcode, in_header.opcode, in_header.nodeid
+            );
             match opcode {
                 Opcode::Init => self.init(in_header, r, w),
                 Opcode::Lookup => self.lookup(in_header, r, w),
@@ -134,6 +124,10 @@ impl Filesystem {
                 Opcode::Destroy => self.destory(),
             }
         } else {
+            debug!(
+                "[Filesystem] received unknown request: opcode={}, inode={}",
+                in_header.opcode, in_header.nodeid
+            );
             Filesystem::reply_error(in_header.unique, w)
         }
     }
@@ -148,6 +142,12 @@ impl Filesystem {
         if major != KERNEL_VERSION || minor < MIN_KERNEL_MINOR_VERSION {
             return Filesystem::reply_error(in_header.unique, w);
         }
+
+        let file = OpenedFile::new(FileType::Dir, "/");
+        let file_key = self.insert_opened_inode(file.clone());
+        self.insert_opened("/", file_key);
+        let file_key = self.insert_opened_inode(file.clone());
+        self.insert_opened("/", file_key);
 
         let out = InitOut {
             major: KERNEL_VERSION,
@@ -171,27 +171,33 @@ impl Filesystem {
     }
 
     fn lookup(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
-        let mut buf = vec![0u8; in_header.len as usize];
+        let name_len = in_header.len as usize - size_of::<InHeader>();
+        let mut buf = vec![0u8; name_len];
         r.read_exact(&mut buf).map_err(|e| {
             new_unexpected_error("failed to decode protocol messages", Some(e.into()))
         })?;
-        let parent_file = self.get_opened_inode(in_header.nodeid.into());
-        let parent_path = match parent_file {
-            Ok(parent_file) => parent_file.path,
-            Err(_) => return Filesystem::reply_error(in_header.unique, w),
-        };
         let name = match Filesystem::bytes_to_str(buf.as_ref()) {
             Ok(name) => name,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
+
+        debug!("[Filesystem] lookup: parent_key={} name={}", in_header.nodeid, name);
+
+        let parent_file = self.get_opened_inode(in_header.nodeid as usize);
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
         let path = PathBuf::from(parent_path)
             .join(name)
             .to_string_lossy()
             .to_string();
+
         if let Some(file_key) = self.get_opened(&path) {
             let file = self.get_opened_inode(file_key).unwrap();
             let out = EntryOut {
-                nodeid: file_key.to_nodeid(),
+                nodeid: file_key as u64,
                 entry_valid: Duration::from_secs(5).as_secs(),
                 attr_valid: Duration::from_secs(5).as_secs(),
                 entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -200,14 +206,16 @@ impl Filesystem {
             };
             return Filesystem::reply_ok(Some(out), None, in_header.unique, w);
         }
+
         let file = match self.rt.block_on(self.do_get_stat(&path)) {
             Ok(stat) => stat,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
         let file_key = self.insert_opened_inode(file.clone());
         self.insert_opened(&path, file_key);
+
         let out = EntryOut {
-            nodeid: file_key.to_nodeid(),
+            nodeid: file_key as u64,
             entry_valid: Duration::from_secs(5).as_secs(),
             attr_valid: Duration::from_secs(5).as_secs(),
             entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -218,12 +226,15 @@ impl Filesystem {
     }
 
     fn getattr(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
-        let file = self.get_opened_inode(in_header.nodeid.into());
+        debug!("[Filesystem] getattr: key={}", in_header.nodeid);
+
+        let file = self.get_opened_inode(in_header.nodeid as usize);
         let mut stat = match file {
             Ok(file) => file.stat,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
         stat.st_ino = in_header.nodeid;
+
         let out = AttrOut {
             attr_valid: Duration::from_secs(5).as_secs(),
             attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -237,8 +248,9 @@ impl Filesystem {
         let CreateIn { .. } = r.read_obj().map_err(|e| {
             new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
         })?;
-        let remaining_len = in_header.len as usize - size_of::<InHeader>() - size_of::<CreateIn>();
-        let mut buf = vec![0u8; remaining_len];
+
+        let name_len = in_header.len as usize - size_of::<InHeader>() - size_of::<CreateIn>();
+        let mut buf = vec![0u8; name_len];
         r.read_exact(&mut buf).map_err(|e| {
             new_unexpected_error("failed to decode protocol messages", Some(e.into()))
         })?;
@@ -247,29 +259,37 @@ impl Filesystem {
             "one or more parameters are missing",
             None,
         ))?;
-        let parent_file = self.get_opened_inode(in_header.nodeid.into());
-        let parent_path = match parent_file {
-            Ok(parent_file) => parent_file.path,
-            Err(_) => return Filesystem::reply_error(in_header.unique, w),
-        };
         let name = match Filesystem::bytes_to_str(buf.as_ref()) {
             Ok(name) => name,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
+
+        debug!("[Filesystem] create: parent_key={} name={}", in_header.nodeid, name);
+
+        let parent_file = self.get_opened_inode(in_header.nodeid as usize);
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
         let path = PathBuf::from(parent_path)
             .join(name)
             .to_string_lossy()
             .to_string();
+
         if self.rt.block_on(self.do_create_file(&path)).is_err() {
             return Filesystem::reply_error(in_header.unique, w);
         }
+
         let file = OpenedFile::new(FileType::File, &path);
         let file_key = self.insert_opened_inode(file.clone());
         self.insert_opened(&path, file_key);
+
         let mut stat = file.stat;
-        stat.st_ino = file_key.to_nodeid();
+        stat.st_ino = file_key as u64;
+
         let entry_out = EntryOut {
-            nodeid: file_key.to_nodeid(),
+            nodeid: file_key as u64,
             entry_valid: Duration::from_secs(5).as_secs(),
             attr_valid: Duration::from_secs(5).as_secs(),
             entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -326,7 +346,7 @@ impl Filesystem {
     fn reply_error(unique: u64, mut w: Writer) -> Result<usize> {
         let header = OutHeader {
             unique,
-            error: libc::EIO,
+            error: -libc::ENOENT,
             len: size_of::<OutHeader>() as u32,
         };
         w.write_all(header.as_slice()).map_err(|e| {
@@ -336,25 +356,29 @@ impl Filesystem {
     }
 
     fn bytes_to_str(buf: &[u8]) -> Result<&str> {
-        std::str::from_utf8(buf).map_err(|e| {
+        return Filesystem::bytes_to_cstr(buf).map(|cstr| cstr.to_str().unwrap());
+    }
+
+    fn bytes_to_cstr(buf: &[u8]) -> Result<&CStr> {
+        CStr::from_bytes_with_nul(buf).map_err(|e| {
             new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
         })
     }
 }
 
 impl Filesystem {
-    fn get_opened(&self, path: &str) -> Option<FileKey> {
+    fn get_opened(&self, path: &str) -> Option<usize> {
         let map = self.opened_files_map.read().unwrap();
         map.get(path).copied()
     }
 
-    fn insert_opened(&self, path: &str, key: FileKey) {
+    fn insert_opened(&self, path: &str, key: usize) {
         let mut map = self.opened_files_map.write().unwrap();
         map.insert(path.to_string(), key);
     }
 
-    fn get_opened_inode(&self, key: FileKey) -> Result<OpenedFile> {
-        if let Some(opened_inode) = self.opened_files.get(key.0) {
+    fn get_opened_inode(&self, key: usize) -> Result<OpenedFile> {
+        if let Some(opened_inode) = self.opened_files.get(key) {
             let inode_data = opened_inode.read().unwrap().clone();
             Ok(inode_data)
         } else {
@@ -362,8 +386,8 @@ impl Filesystem {
         }
     }
 
-    fn insert_opened_inode(&self, value: OpenedFile) -> FileKey {
-        FileKey(self.opened_files.insert(RwLock::new(value)).unwrap())
+    fn insert_opened_inode(&self, value: OpenedFile) -> usize {
+        self.opened_files.insert(RwLock::new(value)).unwrap()
     }
 }
 

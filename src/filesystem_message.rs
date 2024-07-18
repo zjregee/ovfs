@@ -3,6 +3,7 @@ use vm_memory::ByteValued;
 use crate::error::*;
 
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum Opcode {
     Lookup = 1,
     Forget = 2,
