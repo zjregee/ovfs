@@ -1,8 +1,12 @@
 use std::io;
+use std::process::exit;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use opendal::services::S3;
+use log::error;
+use log::info;
+use log::warn;
+use opendal::services::Fs;
 use opendal::Operator;
 use vhost::vhost_user::message::VhostUserProtocolFeatures;
 use vhost::vhost_user::message::VhostUserVirtioFeatures;
@@ -42,7 +46,7 @@ const NUM_QUEUES: usize = REQUEST_QUEUES + 1;
 
 struct VhostUserFsThread {
     mem: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
-    server: Filesystem,
+    server: Arc<Filesystem>,
     event_idx: bool,
     kill_event_fd: EventFd,
 }
@@ -54,30 +58,43 @@ impl VhostUserFsThread {
         })?;
         Ok(VhostUserFsThread {
             mem: None,
-            server: fs,
+            server: Arc::new(fs),
             event_idx: false,
             kill_event_fd: event_fd,
         })
     }
 
-    fn handle_event_serial(&self, device_event: u16, vrings: &[VringMutex]) -> Result<()> {
-        let mut vring_state = match device_event {
-            HIPRIO_QUEUE_EVENT => vrings[0].get_mut(),
-            REQ_QUEUE_EVENT => vrings[1].get_mut(),
-            _ => return Err(new_unexpected_error("failed to handle unknown event", None)),
+    fn return_descriptor(
+        vring_state: &mut VringState,
+        head_index: u16,
+        event_idx: bool,
+        len: usize,
+    ) {
+        let used_len: u32 = match len.try_into() {
+            Ok(l) => l,
+            Err(_) => {
+                error!("invalid used length, can't return used descritors to the ring");
+                exit(1);
+            }
         };
-        if self.event_idx {
-            loop {
-                vring_state.disable_notification().unwrap();
-                self.process_queue_serial(&mut vring_state)?;
-                if !vring_state.enable_notification().unwrap() {
-                    break;
+        if vring_state.add_used(head_index, used_len).is_err() {
+            warn!("couldn't return used descriptors to the ring");
+        }
+        if event_idx {
+            match vring_state.needs_notification() {
+                Err(_) => {
+                    warn!("couldn't check if queue needs to be notified");
+                    vring_state.signal_used_queue().unwrap();
+                }
+                Ok(needs_notification) => {
+                    if needs_notification {
+                        vring_state.signal_used_queue().unwrap();
+                    }
                 }
             }
         } else {
-            self.process_queue_serial(&mut vring_state)?;
+            vring_state.signal_used_queue().unwrap();
         }
-        Ok(())
     }
 
     fn process_queue_serial(&self, vring_state: &mut VringState) -> Result<bool> {
@@ -110,43 +127,33 @@ impl VhostUserFsThread {
         Ok(used_any)
     }
 
-    fn return_descriptor(
-        vring_state: &mut VringState,
-        head_index: u16,
-        event_idx: bool,
-        len: usize,
-    ) {
-        let used_len: u32 = match len.try_into() {
-            Ok(l) => l,
-            Err(_) => panic!("Invalid used length, can't return used descritors to the ring"),
+    fn handle_event_serial(&self, device_event: u16, vrings: &[VringMutex]) -> Result<()> {
+        let mut vring_state = match device_event {
+            HIPRIO_QUEUE_EVENT => vrings[0].get_mut(),
+            REQ_QUEUE_EVENT => vrings[1].get_mut(),
+            _ => return Err(new_unexpected_error("failed to handle unknown event", None)),
         };
-        if vring_state.add_used(head_index, used_len).is_err() {
-            println!("Couldn't return used descriptors to the ring");
-        }
-        if event_idx {
-            match vring_state.needs_notification() {
-                Err(_) => {
-                    println!("Couldn't check if queue needs to be notified");
-                    vring_state.signal_used_queue().unwrap();
-                }
-                Ok(needs_notification) => {
-                    if needs_notification {
-                        vring_state.signal_used_queue().unwrap();
-                    }
+        if self.event_idx {
+            loop {
+                vring_state.disable_notification().unwrap();
+                self.process_queue_serial(&mut vring_state)?;
+                if !vring_state.enable_notification().unwrap() {
+                    break;
                 }
             }
         } else {
-            vring_state.signal_used_queue().unwrap();
+            self.process_queue_serial(&mut vring_state)?;
         }
+        Ok(())
     }
 }
 
-pub struct VhostUserFsBackend {
+struct VhostUserFsBackend {
     thread: RwLock<VhostUserFsThread>,
 }
 
 impl VhostUserFsBackend {
-    pub fn new(fs: Filesystem) -> Result<VhostUserFsBackend> {
+    fn new(fs: Filesystem) -> Result<VhostUserFsBackend> {
         let thread = RwLock::new(VhostUserFsThread::new(fs)?);
         Ok(VhostUserFsBackend { thread })
     }
@@ -189,22 +196,11 @@ impl VhostUserBackend for VhostUserFsBackend {
         Ok(())
     }
 
-    fn exit_event(&self, _thread_index: usize) -> Option<EventFd> {
-        Some(
-            self.thread
-                .read()
-                .unwrap()
-                .kill_event_fd
-                .try_clone()
-                .unwrap(),
-        )
-    }
-
     fn handle_event(
         &self,
         device_event: u16,
         evset: EventSet,
-        vrings: &[Self::Vring],
+        vrings: &[VringMutex],
         _thread_id: usize,
     ) -> io::Result<()> {
         if evset != EventSet::IN {
@@ -219,34 +215,52 @@ impl VhostUserBackend for VhostUserFsBackend {
             .handle_event_serial(device_event, vrings)
             .map_err(|err| err.into())
     }
+
+    fn exit_event(&self, _thread_index: usize) -> Option<EventFd> {
+        Some(
+            self.thread
+                .read()
+                .unwrap()
+                .kill_event_fd
+                .try_clone()
+                .unwrap(),
+        )
+    }
 }
 
 fn main() {
+    env_logger::init();
+
     let socket = "/tmp/vfsd.sock";
-    let listener = Listener::new(socket, true).unwrap();
-    let mut builder = S3::default();
-    builder.bucket("test");
-    builder.endpoint("http://127.0.0.1:9000");
-    builder.access_key_id("minioadmin");
-    builder.secret_access_key("minioadmin");
-    builder.region("us-east-1");
+    let share_path = "/home/zjregee/Code/virtio/ovfs/share";
+    let mut builder = Fs::default();
+    builder.root(share_path);
     let operator = Operator::new(builder)
         .expect("failed to build operator")
         .finish();
+
+    let listener = Listener::new(socket, true).unwrap();
     let fs = Filesystem::new(operator);
     let fs_backend = Arc::new(VhostUserFsBackend::new(fs).unwrap());
+
     let mut daemon = VhostUserDaemon::new(
         String::from("ovfs-backend"),
         fs_backend.clone(),
         GuestMemoryAtomic::new(GuestMemoryMmap::new()),
     )
     .unwrap();
+
     if let Err(e) = daemon.start(listener) {
-        panic!("failed to start daemon: {:?}", e);
+        error!("failed to start daemon: {:?}", e);
+        exit(1);
     }
+    info!("daemon started");
+
     if let Err(e) = daemon.wait() {
-        panic!("failed to wait for daemon: {:?}", e);
+        error!("failed to wait for daemon: {:?}", e);
     }
+    info!("daemon shutdown");
+
     let kill_event_fd = fs_backend
         .thread
         .read()
@@ -255,6 +269,7 @@ fn main() {
         .try_clone()
         .unwrap();
     if let Err(e) = kill_event_fd.write(1) {
-        panic!("error shutting down worker thread: {:?}", e)
+        error!("failed to shutdown worker thread: {:?}", e);
     }
+    info!("worker thread shutdown");
 }
