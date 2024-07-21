@@ -10,6 +10,7 @@ pub enum Opcode {
     Getattr = 3,
     Setattr = 4,
     Open = 14,
+    Write = 16,
     Getxattr = 22,
     Release = 18,
     Flush = 25,
@@ -29,6 +30,7 @@ impl TryFrom<u32> for Opcode {
             3 => Ok(Opcode::Getattr),
             4 => Ok(Opcode::Setattr),
             14 => Ok(Opcode::Open),
+            16 => Ok(Opcode::Write),
             18 => Ok(Opcode::Release),
             22 => Ok(Opcode::Getxattr),
             25 => Ok(Opcode::Flush),
@@ -171,6 +173,25 @@ pub struct OpenOut {
     pub padding: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WriteIn {
+    pub fh: u64,
+    pub offset: u64,
+    pub size: u32,
+    pub write_flags: u32,
+    pub lock_owner: u64,
+    pub flags: u32,
+    pub padding: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WriteOut {
+    pub size: u32,
+    pub padding: u32,
+}
+
 unsafe impl ByteValued for InHeader {}
 unsafe impl ByteValued for OutHeader {}
 unsafe impl ByteValued for InitIn {}
@@ -179,3 +200,5 @@ unsafe impl ByteValued for AttrOut {}
 unsafe impl ByteValued for EntryOut {}
 unsafe impl ByteValued for CreateIn {}
 unsafe impl ByteValued for OpenOut {}
+unsafe impl ByteValued for WriteIn {}
+unsafe impl ByteValued for WriteOut {}

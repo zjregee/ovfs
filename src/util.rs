@@ -19,6 +19,7 @@ use vm_memory::GuestMemoryRegion;
 use vm_memory::VolatileMemory;
 use vm_memory::VolatileSlice;
 
+use crate::buffer::ReadWriteAtVolatile;
 use crate::error::*;
 
 struct DescriptorChainConsumer<'a, B> {
@@ -126,6 +127,16 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
             unsafe { std::slice::from_raw_parts_mut(obj.as_mut_ptr() as *mut u8, size_of::<T>()) };
         self.read_exact(buf)?;
         Ok(unsafe { obj.assume_init() })
+    }
+
+    pub fn read_to_at<F: ReadWriteAtVolatile<B>>(
+        &mut self,
+        dst: F,
+        count: usize,
+    ) -> io::Result<usize> {
+        self.buffer
+            .consume(count, |bufs| dst.write_vectored_at_volatile(bufs))
+            .map_err(|err| err.into())
     }
 }
 

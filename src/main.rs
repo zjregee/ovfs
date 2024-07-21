@@ -29,6 +29,7 @@ use vm_memory::GuestMemoryMmap;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
+mod buffer;
 mod error;
 mod filesystem;
 mod filesystem_message;

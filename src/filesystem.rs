@@ -13,6 +13,7 @@ use sharded_slab::Slab;
 use tokio::runtime::{Builder, Runtime};
 use vm_memory::ByteValued;
 
+use crate::buffer::BufferWrapper;
 use crate::error::*;
 use crate::filesystem_message::*;
 use crate::util::{Reader, Writer};
@@ -118,14 +119,15 @@ impl Filesystem {
                 Opcode::Init => self.init(in_header, r, w),
                 Opcode::Lookup => self.lookup(in_header, r, w),
                 Opcode::Getattr => self.getattr(in_header, r, w),
+                Opcode::Setattr => self.setattr(in_header, r, w),
                 Opcode::Create => self.create(in_header, r, w),
                 Opcode::Open => self.open(in_header, r, w),
+                Opcode::Write => self.write(in_header, r, w),
                 Opcode::Destroy => self.destory(),
                 Opcode::Access => self.access(in_header, r, w),
                 Opcode::Forget => self.forget(in_header, r),
                 Opcode::Release => self.release(in_header, r, w),
                 Opcode::Flush => self.flush(in_header, r, w),
-                Opcode::Setattr => self.setattr(in_header, r, w),
                 Opcode::Getxattr => Filesystem::reply_unimplemented(in_header.unique, w),
             }
         } else {
@@ -194,7 +196,10 @@ impl Filesystem {
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
 
-        debug!("[Filesystem] lookup: parent_key={} name={}", in_header.nodeid, name);
+        debug!(
+            "[Filesystem] lookup: parent_key={} name={}",
+            in_header.nodeid, name
+        );
 
         let parent_file = self.get_opened_inode(in_header.nodeid as usize);
         let parent_path = match parent_file {
@@ -300,7 +305,10 @@ impl Filesystem {
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
 
-        debug!("[Filesystem] create: parent_key={} name={}", in_header.nodeid, name);
+        debug!(
+            "[Filesystem] create: parent_key={} name={}",
+            in_header.nodeid, name
+        );
 
         let parent_file = self.get_opened_inode(in_header.nodeid as usize);
         let parent_path = match parent_file {
@@ -355,6 +363,36 @@ impl Filesystem {
         stat.st_ino = in_header.nodeid;
 
         let out = OpenOut {
+            ..Default::default()
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn write(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        debug!("[Filesystem] write: key={}", in_header.nodeid);
+
+        let file = self.get_opened_inode(in_header.nodeid as usize);
+        let path = match file {
+            Ok(file) => file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        let WriteIn { size, .. } = r.read_obj().map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+
+        let buffer = BufferWrapper::new(Buffer::new());
+        r.read_to_at(&buffer, size as usize).map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let buffer = buffer.get_buffer();
+
+        if self.rt.block_on(self.do_write(&path, buffer)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w);
+        }
+
+        let out = WriteOut {
+            size,
             ..Default::default()
         };
         Filesystem::reply_ok(Some(out), None, in_header.unique, w)
@@ -467,6 +505,15 @@ impl Filesystem {
     async fn do_create_file(&self, path: &str) -> Result<()> {
         self.core
             .write(path, Buffer::new())
+            .await
+            .map_err(opendal_error2error)?;
+
+        Ok(())
+    }
+
+    async fn do_write(&self, path: &str, data: Buffer) -> Result<()> {
+        self.core
+            .write(path, data)
             .await
             .map_err(opendal_error2error)?;
 
