@@ -117,11 +117,16 @@ impl Filesystem {
             match opcode {
                 Opcode::Init => self.init(in_header, r, w),
                 Opcode::Lookup => self.lookup(in_header, r, w),
-                Opcode::Forget => self.forget(in_header, r),
                 Opcode::Getattr => self.getattr(in_header, r, w),
-                Opcode::Access => self.access(in_header, r, w),
                 Opcode::Create => self.create(in_header, r, w),
+                Opcode::Open => self.open(in_header, r, w),
                 Opcode::Destroy => self.destory(),
+                Opcode::Access => self.access(in_header, r, w),
+                Opcode::Forget => self.forget(in_header, r),
+                Opcode::Release => self.release(in_header, r, w),
+                Opcode::Flush => self.flush(in_header, r, w),
+                Opcode::Setattr => self.setattr(in_header, r, w),
+                Opcode::Getxattr => Filesystem::reply_unimplemented(in_header.unique, w),
             }
         } else {
             debug!(
@@ -170,6 +175,14 @@ impl Filesystem {
         Ok(0)
     }
 
+    fn release(&self, _in_header: InHeader, _r: Reader, _w: Writer) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn flush(&self, _in_header: InHeader, _r: Reader, _w: Writer) -> Result<usize> {
+        Ok(0)
+    }
+
     fn lookup(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
         let name_len = in_header.len as usize - size_of::<InHeader>();
         let mut buf = vec![0u8; name_len];
@@ -195,9 +208,11 @@ impl Filesystem {
             .to_string();
 
         if let Some(file_key) = self.get_opened(&path) {
-            let file = self.get_opened_inode(file_key).unwrap();
+            let mut file = self.get_opened_inode(file_key).unwrap();
+            file.stat.st_ino = file_key as u64;
             let out = EntryOut {
                 nodeid: file_key as u64,
+                generation: 0,
                 entry_valid: Duration::from_secs(5).as_secs(),
                 attr_valid: Duration::from_secs(5).as_secs(),
                 entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -207,15 +222,17 @@ impl Filesystem {
             return Filesystem::reply_ok(Some(out), None, in_header.unique, w);
         }
 
-        let file = match self.rt.block_on(self.do_get_stat(&path)) {
+        let mut file = match self.rt.block_on(self.do_get_stat(&path)) {
             Ok(stat) => stat,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
         let file_key = self.insert_opened_inode(file.clone());
         self.insert_opened(&path, file_key);
+        file.stat.st_ino = file_key as u64;
 
         let out = EntryOut {
             nodeid: file_key as u64,
+            generation: 0,
             entry_valid: Duration::from_secs(5).as_secs(),
             attr_valid: Duration::from_secs(5).as_secs(),
             entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -227,6 +244,25 @@ impl Filesystem {
 
     fn getattr(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
         debug!("[Filesystem] getattr: key={}", in_header.nodeid);
+
+        let file = self.get_opened_inode(in_header.nodeid as usize);
+        let mut stat = match file {
+            Ok(file) => file.stat,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        stat.st_ino = in_header.nodeid;
+
+        let out = AttrOut {
+            attr_valid: Duration::from_secs(5).as_secs(),
+            attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            dummy: 0,
+            attr: stat.into(),
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn setattr(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
+        debug!("[Filesystem] setattr: key={}", in_header.nodeid);
 
         let file = self.get_opened_inode(in_header.nodeid as usize);
         let mut stat = match file {
@@ -290,6 +326,7 @@ impl Filesystem {
 
         let entry_out = EntryOut {
             nodeid: file_key as u64,
+            generation: 0,
             entry_valid: Duration::from_secs(5).as_secs(),
             attr_valid: Duration::from_secs(5).as_secs(),
             entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
@@ -305,6 +342,22 @@ impl Filesystem {
             in_header.unique,
             w,
         );
+    }
+
+    fn open(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
+        debug!("[Filesystem] open: key={}", in_header.nodeid);
+
+        let file = self.get_opened_inode(in_header.nodeid as usize);
+        let mut stat = match file {
+            Ok(file) => file.stat,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        stat.st_ino = in_header.nodeid;
+
+        let out = OpenOut {
+            ..Default::default()
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
     }
 }
 
@@ -347,6 +400,18 @@ impl Filesystem {
         let header = OutHeader {
             unique,
             error: -libc::ENOENT,
+            len: size_of::<OutHeader>() as u32,
+        };
+        w.write_all(header.as_slice()).map_err(|e| {
+            new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
+        })?;
+        Ok(w.bytes_written())
+    }
+
+    fn reply_unimplemented(unique: u64, mut w: Writer) -> Result<usize> {
+        let header = OutHeader {
+            unique,
+            error: -libc::ENOSYS,
             len: size_of::<OutHeader>() as u32,
         };
         w.write_all(header.as_slice()).map_err(|e| {
