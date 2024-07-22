@@ -121,6 +121,7 @@ impl Filesystem {
                 Opcode::Getattr => self.getattr(in_header, r, w),
                 Opcode::Setattr => self.setattr(in_header, r, w),
                 Opcode::Create => self.create(in_header, r, w),
+                Opcode::Unlink => self.unlink(in_header, r, w),
                 Opcode::Open => self.open(in_header, r, w),
                 Opcode::Read => self.read(in_header, r, w),
                 Opcode::Write => self.write(in_header, r, w),
@@ -356,6 +357,45 @@ impl Filesystem {
         );
     }
 
+    fn unlink(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let name_len = in_header.len as usize - size_of::<InHeader>();
+        let mut buf = vec![0u8; name_len];
+        r.read_exact(&mut buf).map_err(|e| {
+            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let mut components = buf.split_inclusive(|c| *c == b'\0');
+        let buf = components.next().ok_or(new_unexpected_error(
+            "one or more parameters are missing",
+            None,
+        ))?;
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        debug!(
+            "[Filesystem] unlink: parent_key={} name={}",
+            in_header.nodeid, name
+        );
+
+        let parent_file = self.get_opened_inode(in_header.nodeid as usize);
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        let path = PathBuf::from(parent_path)
+            .join(name)
+            .to_string_lossy()
+            .to_string();
+
+        if self.rt.block_on(self.do_delete_file(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w);
+        }
+
+        Ok(0)
+    }
+
     fn open(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
         debug!("[Filesystem] open: key={}", in_header.nodeid);
 
@@ -390,10 +430,7 @@ impl Filesystem {
             in_header.nodeid, offset, size
         );
 
-        let data = match self
-            .rt
-            .block_on(self.do_read(&path))
-        {
+        let data = match self.rt.block_on(self.do_read(&path)) {
             Ok(data) => data,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
@@ -402,7 +439,11 @@ impl Filesystem {
 
         debug!(
             "[Filesystem] read: key={} offset={} size={} len={} buffer={:?}",
-            in_header.nodeid, offset, size, len, buffer.get_buffer()
+            in_header.nodeid,
+            offset,
+            size,
+            len,
+            buffer.get_buffer(),
         );
 
         let mut data_writer = w.split_at(size_of::<OutHeader>()).unwrap();
@@ -560,6 +601,12 @@ impl Filesystem {
             .write(path, Buffer::new())
             .await
             .map_err(opendal_error2error)?;
+
+        Ok(())
+    }
+
+    async fn do_delete_file(&self, path: &str) -> Result<()> {
+        self.core.delete(path).await.map_err(opendal_error2error)?;
 
         Ok(())
     }
