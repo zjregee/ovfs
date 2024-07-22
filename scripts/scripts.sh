@@ -4,7 +4,7 @@
 exit 0
 
 sudo apt-get update
-sudo apt install libcap-ng-dev libseccomp-dev
+sudo apt install libcap-ng-dev libseccomp-dev uidmap awscli
 sudo apt-get install qemu qemu-kvm
 
 git clone https://gitlab.com/virtio-fs/virtiofsd.git

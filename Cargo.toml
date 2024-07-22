@@ -10,7 +10,7 @@ env_logger = "0.11.3"
 futures = "0.3.30"
 libc = "0.2.139"
 log = "0.4.22"
-opendal = { version = "0.47.3", features = ["services-fs"] }
+opendal = { version = "0.47.3", features = ["services-fs", "services-s3"] }
 sharded-slab = "0.1.7"
 snafu = "0.8.3"
 tokio = { version = "1.37.0", features = ["rt-multi-thread"] }

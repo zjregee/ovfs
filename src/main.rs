@@ -1,3 +1,4 @@
+use std::env;
 use std::io;
 use std::process::exit;
 use std::sync::Arc;
@@ -7,6 +8,7 @@ use log::error;
 use log::info;
 use log::warn;
 use opendal::services::Fs;
+use opendal::services::S3;
 use opendal::Operator;
 use vhost::vhost_user::message::VhostUserProtocolFeatures;
 use vhost::vhost_user::message::VhostUserVirtioFeatures;
@@ -236,17 +238,34 @@ impl VhostUserBackend for VhostUserFsBackend {
     }
 }
 
+fn init_operator() -> Operator {
+    let kind = env::var("KIND").unwrap();
+    if kind == "fs" {
+        let root = env::var("ROOT").unwrap();
+        let mut builder = Fs::default();
+        builder.root(&root);
+        Operator::new(builder).expect("failed to build operator").finish()
+    } else {
+        let bucket = env::var("BUCKET").unwrap();
+        let endpoint = env::var("ENDPOINT").unwrap();
+        let access_key_id = env::var("ACCESS_KEY_ID").unwrap();
+        let secret_access_key = env::var("SECRET_ACCESS_KEY").unwrap();
+        let region = env::var("REGION").unwrap();
+        let mut builder = S3::default();
+        builder.bucket(&bucket);
+        builder.endpoint(&endpoint);
+        builder.access_key_id(&access_key_id);
+        builder.secret_access_key(&secret_access_key);
+        builder.region(&region);
+        Operator::new(builder).expect("failed to build operator").finish()
+    }
+}
+
 fn main() {
     env_logger::init();
 
     let socket = "/tmp/vfsd.sock";
-    let share_path = "/home/zjregee/Code/virtio/ovfs/share";
-    let mut builder = Fs::default();
-    builder.root(share_path);
-    let operator = Operator::new(builder)
-        .expect("failed to build operator")
-        .finish();
-
+    let operator = init_operator();
     let listener = Listener::new(socket, true).unwrap();
     let fs = Filesystem::new(operator);
     let fs_backend = Arc::new(VhostUserFsBackend::new(fs).unwrap());
