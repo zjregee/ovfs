@@ -122,6 +122,7 @@ impl Filesystem {
                 Opcode::Setattr => self.setattr(in_header, r, w),
                 Opcode::Create => self.create(in_header, r, w),
                 Opcode::Open => self.open(in_header, r, w),
+                Opcode::Read => self.read(in_header, r, w),
                 Opcode::Write => self.write(in_header, r, w),
                 Opcode::Destroy => self.destory(),
                 Opcode::Access => self.access(in_header, r, w),
@@ -215,6 +216,7 @@ impl Filesystem {
         if let Some(file_key) = self.get_opened(&path) {
             let mut file = self.get_opened_inode(file_key).unwrap();
             file.stat.st_ino = file_key as u64;
+            file.stat.st_size = 8;
             let out = EntryOut {
                 nodeid: file_key as u64,
                 generation: 0,
@@ -234,6 +236,7 @@ impl Filesystem {
         let file_key = self.insert_opened_inode(file.clone());
         self.insert_opened(&path, file_key);
         file.stat.st_ino = file_key as u64;
+        file.stat.st_size = 8;
 
         let out = EntryOut {
             nodeid: file_key as u64,
@@ -256,6 +259,7 @@ impl Filesystem {
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
         stat.st_ino = in_header.nodeid;
+        stat.st_size = 8;
 
         let out = AttrOut {
             attr_valid: Duration::from_secs(5).as_secs(),
@@ -366,6 +370,55 @@ impl Filesystem {
             ..Default::default()
         };
         Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn read(&self, in_header: InHeader, mut r: Reader, mut w: Writer) -> Result<usize> {
+        debug!("[Filesystem] read: key={}", in_header.nodeid);
+
+        let file = self.get_opened_inode(in_header.nodeid as usize);
+        let path = match file {
+            Ok(file) => file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        let ReadIn { offset, size, .. } = r.read_obj().map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+
+        debug!(
+            "[Filesystem] read: key={} offset={} size={}",
+            in_header.nodeid, offset, size
+        );
+
+        let data = match self
+            .rt
+            .block_on(self.do_read(&path))
+        {
+            Ok(data) => data,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        let len = data.len();
+        let buffer = BufferWrapper::new(data);
+
+        debug!(
+            "[Filesystem] read: key={} offset={} size={} len={} buffer={:?}",
+            in_header.nodeid, offset, size, len, buffer.get_buffer()
+        );
+
+        let mut data_writer = w.split_at(size_of::<OutHeader>()).unwrap();
+        data_writer.write_from_at(&buffer, len).map_err(|e| {
+            new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
+        })?;
+
+        let out = OutHeader {
+            len: (size_of::<OutHeader>() + len) as u32,
+            error: 0,
+            unique: in_header.unique,
+        };
+        w.write_all(out.as_slice()).map_err(|e| {
+            new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
+        })?;
+        Ok(out.len as usize)
     }
 
     fn write(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
@@ -509,6 +562,12 @@ impl Filesystem {
             .map_err(opendal_error2error)?;
 
         Ok(())
+    }
+
+    async fn do_read(&self, path: &str) -> Result<Buffer> {
+        let data = self.core.read(path).await.map_err(opendal_error2error)?;
+
+        Ok(data)
     }
 
     async fn do_write(&self, path: &str, data: Buffer) -> Result<()> {

@@ -72,6 +72,48 @@ impl<'a, B: BitmapSlice> DescriptorChainConsumer<'a, B> {
         self.bytes_consumed = total_bytes_consumed;
         Ok(bytes_consumed)
     }
+
+    fn split_at(&mut self, offset: usize) -> Result<DescriptorChainConsumer<'a, B>> {
+        let mut remain = offset;
+        let pos = self.buffers.iter().position(|vs| {
+            if remain < vs.len() {
+                true
+            } else {
+                remain -= vs.len();
+                false
+            }
+        });
+        if let Some(at) = pos {
+            let mut other = self.buffers.split_off(at);
+            if remain > 0 {
+                let front = other.pop_front().expect("empty VecDeque after split");
+                self.buffers.push_back(
+                    front
+                        .subslice(0, remain)
+                        .map_err(|_| new_vhost_user_fs_error("volatile memory error", None))?,
+                );
+                other.push_front(
+                    front
+                        .offset(remain)
+                        .map_err(|_| new_vhost_user_fs_error("volatile memory error", None))?,
+                );
+            }
+            Ok(DescriptorChainConsumer {
+                buffers: other,
+                bytes_consumed: 0,
+            })
+        } else if remain == 0 {
+            Ok(DescriptorChainConsumer {
+                buffers: VecDeque::new(),
+                bytes_consumed: 0,
+            })
+        } else {
+            Err(new_vhost_user_fs_error(
+                "DescriptorChain split is out of bounds",
+                None,
+            ))
+        }
+    }
 }
 
 pub struct Reader<'a, B = ()> {
@@ -209,6 +251,20 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
 
     pub fn bytes_written(&self) -> usize {
         self.buffer.bytes_consumed()
+    }
+
+    pub fn split_at(&mut self, offset: usize) -> Result<Writer<'a, B>> {
+        self.buffer.split_at(offset).map(|buffer| Writer { buffer })
+    }
+
+    pub fn write_from_at<F: ReadWriteAtVolatile<B>>(
+        &mut self,
+        src: F,
+        count: usize,
+    ) -> io::Result<usize> {
+        self.buffer
+            .consume(count, |bufs| src.read_vectored_at_volatile(bufs))
+            .map_err(|err| err.into())
     }
 }
 
