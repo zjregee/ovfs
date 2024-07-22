@@ -244,7 +244,9 @@ fn init_operator() -> Operator {
         let root = env::var("ROOT").unwrap();
         let mut builder = Fs::default();
         builder.root(&root);
-        Operator::new(builder).expect("failed to build operator").finish()
+        Operator::new(builder)
+            .expect("failed to build operator")
+            .finish()
     } else {
         let bucket = env::var("BUCKET").unwrap();
         let endpoint = env::var("ENDPOINT").unwrap();
@@ -257,7 +259,9 @@ fn init_operator() -> Operator {
         builder.access_key_id(&access_key_id);
         builder.secret_access_key(&secret_access_key);
         builder.region(&region);
-        Operator::new(builder).expect("failed to build operator").finish()
+        Operator::new(builder)
+            .expect("failed to build operator")
+            .finish()
     }
 }
 
