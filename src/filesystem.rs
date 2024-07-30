@@ -122,14 +122,19 @@ impl Filesystem {
                 Opcode::Setattr => self.setattr(in_header, r, w),
                 Opcode::Create => self.create(in_header, r, w),
                 Opcode::Unlink => self.unlink(in_header, r, w),
+                Opcode::Mkdir => self.mkdir(in_header, r, w),
+                Opcode::Rmdir => self.rmdir(in_header, r, w),
                 Opcode::Open => self.open(in_header, r, w),
+                Opcode::Opendir => self.opendir(in_header, r, w),
                 Opcode::Read => self.read(in_header, r, w),
                 Opcode::Write => self.write(in_header, r, w),
                 Opcode::Destroy => self.destory(),
                 Opcode::Access => self.access(in_header, r, w),
                 Opcode::Forget => self.forget(in_header, r),
                 Opcode::Release => self.release(in_header, r, w),
+                Opcode::Releasedir => self.releasedir(in_header, r, w),
                 Opcode::Flush => self.flush(in_header, r, w),
+                Opcode::Fsyncdir => self.fsyncdir(in_header, r, w),
                 Opcode::Getxattr => Filesystem::reply_unimplemented(in_header.unique, w),
             }
         } else {
@@ -183,7 +188,15 @@ impl Filesystem {
         Ok(0)
     }
 
+    fn releasedir(&self, _in_header: InHeader, _r: Reader, _w: Writer) -> Result<usize> {
+        Ok(0)
+    }
+
     fn flush(&self, _in_header: InHeader, _r: Reader, _w: Writer) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn fsyncdir(&self, _in_header: InHeader, _r: Reader, _w: Writer) -> Result<usize> {
         Ok(0)
     }
 
@@ -389,7 +402,105 @@ impl Filesystem {
             .to_string_lossy()
             .to_string();
 
-        if self.rt.block_on(self.do_delete_file(&path)).is_err() {
+        if self.rt.block_on(self.do_delete(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w);
+        }
+
+        Ok(0)
+    }
+
+    fn mkdir(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let MkdirIn { .. } = r.read_obj().map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+
+        let name_len = in_header.len as usize - size_of::<InHeader>() - size_of::<CreateIn>();
+        let mut buf = vec![0u8; name_len];
+        r.read_exact(&mut buf).map_err(|e| {
+            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let mut components = buf.split_inclusive(|c| *c == b'\0');
+        let buf = components.next().ok_or(new_unexpected_error(
+            "one or more parameters are missing",
+            None,
+        ))?;
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        debug!(
+            "[Filesystem] mkdir: parent_key={} name={}",
+            in_header.nodeid, name
+        );
+
+        let parent_file = self.get_opened_inode(in_header.nodeid as usize);
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        let path = PathBuf::from(parent_path)
+            .join(name)
+            .to_string_lossy()
+            .to_string();
+
+        if self.rt.block_on(self.do_create_dir(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w);
+        }
+
+        let file = OpenedFile::new(FileType::Dir, &path);
+        let file_key = self.insert_opened_inode(file.clone());
+        self.insert_opened(&path, file_key);
+
+        let mut stat = file.stat;
+        stat.st_ino = file_key as u64;
+
+        let entry_out = EntryOut {
+            nodeid: file_key as u64,
+            generation: 0,
+            entry_valid: Duration::from_secs(5).as_secs(),
+            attr_valid: Duration::from_secs(5).as_secs(),
+            entry_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            attr_valid_nsec: Duration::from_secs(5).subsec_nanos(),
+            attr: stat.into(),
+        };
+        return Filesystem::reply_ok(Some(entry_out), None, in_header.unique, w);
+    }
+
+    fn rmdir(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let name_len = in_header.len as usize - size_of::<InHeader>();
+        let mut buf = vec![0u8; name_len];
+        r.read_exact(&mut buf).map_err(|e| {
+            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+        let mut components = buf.split_inclusive(|c| *c == b'\0');
+        let buf = components.next().ok_or(new_unexpected_error(
+            "one or more parameters are missing",
+            None,
+        ))?;
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        debug!(
+            "[Filesystem] rmdir: parent_key={} name={}",
+            in_header.nodeid, name
+        );
+
+        let parent_file = self.get_opened_inode(in_header.nodeid as usize);
+        let parent_path = match parent_file {
+            Ok(parent_file) => parent_file.path,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        let path = PathBuf::from(parent_path)
+            .join(name)
+            .to_string_lossy()
+            .to_string();
+
+        if self.rt.block_on(self.do_delete(&path)).is_err() {
             return Filesystem::reply_error(in_header.unique, w);
         }
 
@@ -398,6 +509,22 @@ impl Filesystem {
 
     fn open(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
         debug!("[Filesystem] open: key={}", in_header.nodeid);
+
+        let file = self.get_opened_inode(in_header.nodeid as usize);
+        let mut stat = match file {
+            Ok(file) => file.stat,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+        stat.st_ino = in_header.nodeid;
+
+        let out = OpenOut {
+            ..Default::default()
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn opendir(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
+        debug!("[Filesystem] opendir: key={}", in_header.nodeid);
 
         let file = self.get_opened_inode(in_header.nodeid as usize);
         let mut stat = match file {
@@ -605,7 +732,16 @@ impl Filesystem {
         Ok(())
     }
 
-    async fn do_delete_file(&self, path: &str) -> Result<()> {
+    async fn do_create_dir(&self, path: &str) -> Result<()> {
+        self.core
+            .create_dir(path)
+            .await
+            .map_err(opendal_error2error)?;
+
+        Ok(())
+    }
+
+    async fn do_delete(&self, path: &str) -> Result<()> {
         self.core.delete(path).await.map_err(opendal_error2error)?;
 
         Ok(())

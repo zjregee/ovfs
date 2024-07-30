@@ -9,14 +9,19 @@ pub enum Opcode {
     Forget = 2,
     Getattr = 3,
     Setattr = 4,
+    Mkdir = 9,
     Unlink = 10,
+    Rmdir = 11,
     Open = 14,
     Read = 15,
     Write = 16,
-    Getxattr = 22,
     Release = 18,
+    Getxattr = 22,
     Flush = 25,
     Init = 26,
+    Opendir = 27,
+    Releasedir = 29,
+    Fsyncdir = 30,
     Access = 34,
     Create = 35,
     Destroy = 38,
@@ -31,7 +36,9 @@ impl TryFrom<u32> for Opcode {
             2 => Ok(Opcode::Forget),
             3 => Ok(Opcode::Getattr),
             4 => Ok(Opcode::Setattr),
+            9 => Ok(Opcode::Mkdir),
             10 => Ok(Opcode::Unlink),
+            11 => Ok(Opcode::Rmdir),
             14 => Ok(Opcode::Open),
             15 => Ok(Opcode::Read),
             16 => Ok(Opcode::Write),
@@ -39,6 +46,9 @@ impl TryFrom<u32> for Opcode {
             22 => Ok(Opcode::Getxattr),
             25 => Ok(Opcode::Flush),
             26 => Ok(Opcode::Init),
+            27 => Ok(Opcode::Opendir),
+            29 => Ok(Opcode::Releasedir),
+            30 => Ok(Opcode::Fsyncdir),
             34 => Ok(Opcode::Access),
             35 => Ok(Opcode::Create),
             38 => Ok(Opcode::Destroy),
@@ -171,6 +181,13 @@ pub struct CreateIn {
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
+pub struct MkdirIn {
+    pub mode: u32,
+    pub umask: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct OpenOut {
     pub fh: u64,
     pub open_flags: u32,
@@ -215,6 +232,7 @@ unsafe impl ByteValued for InitOut {}
 unsafe impl ByteValued for AttrOut {}
 unsafe impl ByteValued for EntryOut {}
 unsafe impl ByteValued for CreateIn {}
+unsafe impl ByteValued for MkdirIn {}
 unsafe impl ByteValued for OpenOut {}
 unsafe impl ByteValued for WriteIn {}
 unsafe impl ByteValued for WriteOut {}
