@@ -20,6 +20,7 @@ pub enum Opcode {
     Flush = 25,
     Init = 26,
     Opendir = 27,
+    Readdir = 28,
     Releasedir = 29,
     Fsyncdir = 30,
     Access = 34,
@@ -47,6 +48,7 @@ impl TryFrom<u32> for Opcode {
             25 => Ok(Opcode::Flush),
             26 => Ok(Opcode::Init),
             27 => Ok(Opcode::Opendir),
+            28 => Ok(Opcode::Readdir),
             29 => Ok(Opcode::Releasedir),
             30 => Ok(Opcode::Fsyncdir),
             34 => Ok(Opcode::Access),
@@ -172,6 +174,15 @@ pub struct EntryOut {
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
+pub struct DirEntryOut {
+    pub ino: u64,
+    pub off: u64,
+    pub namelen: u32,
+    pub type_: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct CreateIn {
     pub flags: u32,
     pub mode: u32,
@@ -231,6 +242,7 @@ unsafe impl ByteValued for InitIn {}
 unsafe impl ByteValued for InitOut {}
 unsafe impl ByteValued for AttrOut {}
 unsafe impl ByteValued for EntryOut {}
+unsafe impl ByteValued for DirEntryOut {}
 unsafe impl ByteValued for CreateIn {}
 unsafe impl ByteValued for MkdirIn {}
 unsafe impl ByteValued for OpenOut {}
