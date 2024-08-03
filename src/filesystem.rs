@@ -122,10 +122,6 @@ impl Filesystem {
             return Filesystem::reply_error(in_header.unique, w);
         }
         if let Ok(opcode) = Opcode::try_from(in_header.opcode) {
-            debug!(
-                "[Filesystem] received request: opcode={:?} ({}), inode={}",
-                opcode, in_header.opcode, in_header.nodeid
-            );
             match opcode {
                 Opcode::Init => self.init(in_header, r, w),
                 Opcode::Lookup => self.lookup(in_header, r, w),
@@ -426,7 +422,7 @@ impl Filesystem {
             new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
         })?;
 
-        let name_len = in_header.len as usize - size_of::<InHeader>() - size_of::<CreateIn>();
+        let name_len = in_header.len as usize - size_of::<InHeader>() - size_of::<MkdirIn>();
         let mut buf = vec![0u8; name_len];
         r.read_exact(&mut buf).map_err(|e| {
             new_unexpected_error("failed to decode protocol messages", Some(e.into()))
@@ -830,8 +826,14 @@ impl Filesystem {
     }
 
     async fn do_create_dir(&self, path: &str) -> Result<()> {
+        let path = if !path.ends_with('/') {
+            format!("{}/", path)
+        } else {
+            path.to_string()
+        };
+
         self.core
-            .create_dir(path)
+            .create_dir(&path)
             .await
             .map_err(opendal_error2error)?;
 
