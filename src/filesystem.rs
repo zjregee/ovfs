@@ -23,9 +23,6 @@ const KERNEL_MINOR_VERSION: u32 = 38;
 const MIN_KERNEL_MINOR_VERSION: u32 = 27;
 const BUFFER_HEADER_SIZE: u32 = 4096;
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
-
-// const CURRENT_DIR_CSTR: &[u8] = b".";
-// const PARENT_DIR_CSTR: &[u8] = b"..";
 const DIRENT_PADDING: [u8; 8] = [0; 8];
 
 enum FileType {
@@ -64,8 +61,8 @@ impl OpenedFile {
 }
 
 struct DirEntry {
-    ino: libc::ino64_t,
-    offset: u64,
+    ino: u64,
+    off: u64,
     type_: u32,
     name: String,
 }
@@ -238,7 +235,7 @@ impl Filesystem {
         if let Some(file_key) = self.get_opened(&path) {
             let mut file = self.get_opened_inode(file_key).unwrap();
             file.stat.st_ino = file_key as u64;
-            file.stat.st_size = 8;
+            file.stat.st_size = 2;
             let out = EntryOut {
                 nodeid: file_key as u64,
                 generation: 0,
@@ -258,7 +255,7 @@ impl Filesystem {
         let file_key = self.insert_opened_inode(file.clone());
         self.insert_opened(&path, file_key);
         file.stat.st_ino = file_key as u64;
-        file.stat.st_size = 8;
+        file.stat.st_size = 2;
 
         let out = EntryOut {
             nodeid: file_key as u64,
@@ -281,7 +278,7 @@ impl Filesystem {
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
         stat.st_ino = in_header.nodeid;
-        stat.st_size = 8;
+        stat.st_size = 2;
 
         let out = AttrOut {
             attr_valid: Duration::from_secs(5).as_secs(),
@@ -628,17 +625,20 @@ impl Filesystem {
     }
 
     fn readdir(&self, in_header: InHeader, mut r: Reader, mut w: Writer) -> Result<usize> {
-        debug!("[Filesystem] readdir: key={}", in_header.nodeid);
-
-        let ReadIn { .. } = r.read_obj().map_err(|e| {
-            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
-
         let file = self.get_opened_inode(in_header.nodeid as usize);
         let path = match file {
             Ok(file) => file.path,
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
+
+        let ReadIn { offset, size, .. } = r.read_obj().map_err(|e| {
+            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
+        })?;
+
+        debug!(
+            "[Filesystem] readdir: key={} offset={} size={}",
+            in_header.nodeid, offset, size
+        );
 
         let mut data_writer = w.split_at(size_of::<OutHeader>()).unwrap();
 
@@ -647,18 +647,62 @@ impl Filesystem {
             Err(_) => return Filesystem::reply_error(in_header.unique, w),
         };
 
+        if offset as usize >= entries.len() {
+            let out = OutHeader {
+                len: size_of::<OutHeader>() as u32,
+                error: 0,
+                unique: in_header.unique,
+            };
+            w.write_all(out.as_slice()).map_err(|e| {
+                new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
+            })?;
+            return Ok(out.len as usize);
+        }
+
         let mut total_written = 0;
-        for entry in entries {
-            match Filesystem::reply_add_dir_entry(&mut data_writer, entry, None) {
+
+        let entry = DirEntry {
+            ino: in_header.nodeid,
+            off: 1,
+            name: ".".to_string(),
+            type_: 4,
+        };
+
+        match Filesystem::reply_add_dir_entry(&mut data_writer, entry) {
+            Ok(len) => {
+                total_written += len;
+            }
+            Err(_) => return Filesystem::reply_error(in_header.unique, w),
+        };
+
+        for mut entry in entries {
+            let path = PathBuf::from(&path)
+                .join(&entry.name)
+                .to_string_lossy()
+                .to_string();
+
+            if let Some(file_key) = self.get_opened(&path) {
+                entry.ino = file_key as u64;
+            } else {
+                let file = match self.rt.block_on(self.do_get_stat(&path)) {
+                    Ok(stat) => stat,
+                    Err(_) => return Filesystem::reply_error(in_header.unique, w),
+                };
+                let file_key = self.insert_opened_inode(file);
+                self.insert_opened(&path, file_key);
+                entry.ino = file_key as u64;
+            };
+
+            match Filesystem::reply_add_dir_entry(&mut data_writer, entry) {
                 Ok(len) => {
-                    total_written += len as u32;
+                    total_written += len;
                 }
-                Err(e) => return Err(e),
+                Err(_) => return Filesystem::reply_error(in_header.unique, w),
             };
         }
 
         let out = OutHeader {
-            len: size_of::<OutHeader>() as u32 + total_written,
+            len: (size_of::<OutHeader>() + total_written) as u32,
             error: 0,
             unique: in_header.unique,
         };
@@ -729,40 +773,25 @@ impl Filesystem {
         Ok(w.bytes_written())
     }
 
-    fn reply_add_dir_entry(
-        cursor: &mut Writer,
-        d: DirEntry,
-        entry: Option<EntryOut>,
-    ) -> Result<usize> {
-        let dir_entry_len = size_of::<DirEntryOut>() + d.name.len();
-        let padded_dirent_len = (dir_entry_len + 7) & !7;
-        let total_len = if entry.is_some() {
-            padded_dirent_len + size_of::<EntryOut>()
-        } else {
-            padded_dirent_len
+    fn reply_add_dir_entry(cursor: &mut Writer, entry: DirEntry) -> Result<usize> {
+        let entry_len = size_of::<DirEntryOut>() + entry.name.len();
+        let total_len = (entry_len + 7) & !7;
+
+        let out = DirEntryOut {
+            ino: entry.ino,
+            off: entry.off,
+            namelen: entry.name.len() as u32,
+            type_: entry.type_,
         };
 
-        if let Some(entry) = entry {
-            cursor.write_all(entry.as_slice()).map_err(|e| {
-                new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
-            })?;
-        }
-
-        let dirent = DirEntryOut {
-            ino: d.ino,
-            off: d.offset,
-            namelen: d.name.len() as u32,
-            type_: d.type_,
-        };
-
-        cursor.write_all(dirent.as_slice()).map_err(|e| {
+        cursor.write_all(out.as_slice()).map_err(|e| {
             new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
         })?;
-        cursor.write_all(d.name.as_bytes()).map_err(|e| {
+        cursor.write_all(entry.name.as_bytes()).map_err(|e| {
             new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
         })?;
 
-        let padding = padded_dirent_len - dir_entry_len;
+        let padding = total_len - entry_len;
         if padding > 0 {
             cursor.write_all(&DIRENT_PADDING[..padding]).map_err(|e| {
                 new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
@@ -862,7 +891,7 @@ impl Filesystem {
     }
 
     async fn do_readdir(&self, path: &str) -> Result<Vec<DirEntry>> {
-        let data = self
+        let entries = self
             .core
             .list(path)
             .await
@@ -871,12 +900,12 @@ impl Filesystem {
             .enumerate()
             .map(|(i, entry)| DirEntry {
                 ino: 0,
-                offset: i as u64 + 2,
-                type_: 0,
+                off: i as u64 + 1,
                 name: entry.name().to_string(),
+                type_: 8,
             })
             .collect();
 
-        Ok(data)
+        Ok(entries)
     }
 }
