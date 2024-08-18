@@ -1,0 +1,25 @@
+name: OVFS Behavior Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Behavior Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run OVFS and VM
+        run: |
+          chmod +x ./build_and_run_ovfs.sh
+          chmod +x ./build_and_run_vm.sh
+          nohup ./build_and_run_ovfs.sh &
+          ./install_and_run_vm.sh
+        working-directory: ./github/scripts
