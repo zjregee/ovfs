@@ -22,4 +22,4 @@ jobs:
           chmod +x ./build_and_run_vm.sh
           nohup ./build_and_run_ovfs.sh &
           ./install_and_run_vm.sh
-        working-directory: ./github/scripts
+        working-directory: .github/scripts
