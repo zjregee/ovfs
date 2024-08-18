@@ -21,5 +21,10 @@ jobs:
           chmod +x ./build_and_run_ovfs.sh
           chmod +x ./install_and_run_vm.sh
           nohup ./build_and_run_ovfs.sh &
-          ./install_and_run_vm.sh
+          nohup ./install_and_run_vm.sh &
+        working-directory: .github/scripts
+      
+      - name: Run Behavior Test
+        run: |
+          python behavior_test.py
         working-directory: .github/scripts
