@@ -16,15 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OVFS and VM
+      - name: Run Behavior Test
         run: |
           chmod +x ./build_and_run_ovfs.sh
           chmod +x ./install_and_run_vm.sh
           nohup ./build_and_run_ovfs.sh &
           nohup ./install_and_run_vm.sh &
-        working-directory: .github/scripts
-      
-      - name: Run Behavior Test
-        run: |
+          pip install paramiko
           python behavior_test.py
         working-directory: .github/scripts
