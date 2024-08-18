@@ -5,7 +5,7 @@ sudo apt-get install -y cloud-image-utils qemu qemu-kvm
 
 cloud-localds seed.iso user-data meta-data
 
-# wget https://releases.ubuntu.com/20.04/ubuntu-20.04.6-live-server-amd64.iso
+wget https://releases.ubuntu.com/20.04/ubuntu-20.04.6-live-server-amd64.iso
 
 sudo mkdir /mnt/ubuntu-iso
 sudo mount -o loop ubuntu-20.04.6-live-server-amd64.iso /mnt/ubuntu-iso
