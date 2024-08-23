@@ -1,30 +1,51 @@
-import paramiko
-import time
+import os
 
-hostname = "localhost"
-port = 2222
-username = "ubuntu"
-password = "ubuntu"
+TEST_POINT = "/mnt"
+TEST_TEXT = "OpenDAL: access data freely."
 
-ssh = paramiko.SSHClient()
-ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+def test_file():
+    path = os.path.join(TEST_POINT, "test_file.txt")
+    with open(path, "w") as f:
+        f.write(TEST_TEXT)
+    with open(path, "r") as f:
+        content = f.read()
+        assert content == TEST_TEXT
+    os.remove(path)
 
-# Wait for the VM to boot.
-time.sleep(5 * 60)
+def test_file_append():
+    path = os.path.join(TEST_POINT, "test_file_append.txt")
+    with open(path, "w") as f:
+        f.write(TEST_TEXT)
+    with open(path, "a") as f:
+        f.write(TEST_TEXT)
+    with open(path, "r") as f:
+        content = f.read()
+        assert content == TEST_TEXT * 2
+    os.remove(path)
 
-try:
-    ssh.connect(hostname=hostname, port=port, username=username, password=password)
-    sudo_command = "sudo -S mount -t virtiofs myfs /mnt"
+def test_file_seek():
+    path = os.path.join(TEST_POINT, "test_file_seek.txt")
+    with open(path, "w") as f:
+        f.write(TEST_TEXT)
+    with open(path, "r") as f:
+        f.seek(len(TEST_TEXT) // 2)
+        content = f.read()
+        assert content == TEST_TEXT[len(TEST_TEXT) // 2:]
+    os.remove(path)
 
-    stdin, stdout, stderr = ssh.exec_command(sudo_command)
+def test_file_truncate():
+    path = os.path.join(TEST_POINT, "test_file_truncate.txt")
+    with open(path, "w") as f:
+        f.write(TEST_TEXT)
+    with open(path, "w") as f:
+        f.write(TEST_TEXT[:len(TEST_TEXT) // 2])
+    with open(path, "r") as f:
+        content = f.read()
+        assert content == TEST_TEXT[:len(TEST_TEXT) // 2]
+    os.remove(path)
 
-    stdin.write(password + '\n')
-    stdin.flush()
-
-    output = stdout.read().decode('utf-8')
-    errors = stderr.read().decode('utf-8')
-
-    print("mount done")
-
-finally:
-    ssh.close()
+if __name__ == "__main__":
+    test_file()
+    test_file_append()
+    test_file_seek()
+    test_file_truncate()
