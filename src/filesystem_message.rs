@@ -16,14 +16,12 @@ pub enum Opcode {
     Read = 15,
     Write = 16,
     Release = 18,
-    Getxattr = 22,
     Flush = 25,
     Init = 26,
     Opendir = 27,
     Readdir = 28,
     Releasedir = 29,
     Fsyncdir = 30,
-    Access = 34,
     Create = 35,
     Destroy = 38,
 }
@@ -44,14 +42,12 @@ impl TryFrom<u32> for Opcode {
             15 => Ok(Opcode::Read),
             16 => Ok(Opcode::Write),
             18 => Ok(Opcode::Release),
-            22 => Ok(Opcode::Getxattr),
             25 => Ok(Opcode::Flush),
             26 => Ok(Opcode::Init),
             27 => Ok(Opcode::Opendir),
             28 => Ok(Opcode::Readdir),
             29 => Ok(Opcode::Releasedir),
             30 => Ok(Opcode::Fsyncdir),
-            34 => Ok(Opcode::Access),
             35 => Ok(Opcode::Create),
             38 => Ok(Opcode::Destroy),
             _ => Err(new_vhost_user_fs_error("failed to decode opcode", None)),
@@ -78,29 +74,6 @@ pub struct Attr {
     pub rdev: u32,
     pub blksize: u32,
     pub flags: u32,
-}
-
-impl From<libc::stat64> for Attr {
-    fn from(st: libc::stat64) -> Attr {
-        Attr {
-            ino: st.st_ino,
-            size: st.st_size as u64,
-            blocks: st.st_blocks as u64,
-            atime: st.st_atime as u64,
-            mtime: st.st_mtime as u64,
-            ctime: st.st_ctime as u64,
-            atimensec: st.st_atime_nsec as u32,
-            mtimensec: st.st_mtime_nsec as u32,
-            ctimensec: st.st_ctime_nsec as u32,
-            mode: st.st_mode,
-            nlink: st.st_nlink as u32,
-            uid: st.st_uid,
-            gid: st.st_gid,
-            rdev: st.st_rdev as u32,
-            blksize: st.st_blksize as u32,
-            flags: 0,
-        }
-    }
 }
 
 #[repr(C)]
@@ -199,6 +172,13 @@ pub struct MkdirIn {
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
+pub struct OpenIn {
+    pub flags: u32,
+    pub open_flags: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct OpenOut {
     pub fh: u64,
     pub open_flags: u32,
@@ -245,6 +225,7 @@ unsafe impl ByteValued for EntryOut {}
 unsafe impl ByteValued for DirEntryOut {}
 unsafe impl ByteValued for CreateIn {}
 unsafe impl ByteValued for MkdirIn {}
+unsafe impl ByteValued for OpenIn {}
 unsafe impl ByteValued for OpenOut {}
 unsafe impl ByteValued for WriteIn {}
 unsafe impl ByteValued for WriteOut {}

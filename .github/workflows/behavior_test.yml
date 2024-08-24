@@ -23,5 +23,5 @@ jobs:
           nohup ./build_and_run_ovfs.sh &
           nohup ./install_and_run_vm.sh &
           pip install paramiko
-          python behavior_test.py
+          python behavior_test_judge.py
         working-directory: .github/scripts

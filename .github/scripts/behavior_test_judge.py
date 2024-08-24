@@ -26,7 +26,16 @@ if exit_status != 0:
     print(errors)
     sys.exit(1)
 
-test_command = "python3 /mnt/behavior_test.py"
+test_command = "python3 /mnt/file_behavior_test.py"
+stdin, stdout, stderr = ssh.exec_command(test_command)
+output = stdout.read().decode('utf-8')
+errors = stderr.read().decode('utf-8')
+exit_status = stdout.channel.recv_exit_status()
+if exit_status != 0:
+    print(errors)
+    sys.exit(1)
+
+test_command = "python3 /mnt/path_behavior_test.py"
 stdin, stdout, stderr = ssh.exec_command(test_command)
 output = stdout.read().decode('utf-8')
 errors = stderr.read().decode('utf-8')
