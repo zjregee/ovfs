@@ -6,14 +6,16 @@ edition = "2021"
 [dependencies]
 anyhow = { version = "1.0.86", features = ["std"] }
 bitflags = "1.2"
-env_logger = "0.11.3"
+clap = { version = "4.5.16", features = ["derive", "env"] }
+env_logger = "0.11.5"
 futures = "0.3.30"
 libc = "0.2.139"
 log = "0.4.22"
-opendal = { version = "0.47.3", features = ["services-fs", "services-s3"] }
+opendal = { version = "0.49.1", features = ["services-fs", "services-s3"] }
 sharded-slab = "0.1.7"
-snafu = "0.8.3"
-tokio = { version = "1.37.0", features = ["rt-multi-thread"] }
+snafu = "0.8.4"
+tokio = { version = "1.39.3", features = ["rt-multi-thread"] }
+url = "2.5.2"
 vhost = "0.10.0"
 vhost-user-backend = "0.13.1"
 virtio-bindings = { version = "0.2.1", features = ["virtio-v5_0_0"] }

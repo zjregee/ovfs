@@ -359,8 +359,9 @@ impl Filesystem {
             None => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
         };
 
-        let mut opened_file_writer = self.opened_files_writer.lock().unwrap();
-        opened_file_writer.remove(&path);
+        if self.rt.block_on(self.do_release_writer(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w, libc::EIO);
+        }
 
         Filesystem::reply_ok(None::<u8>, None, in_header.unique, w)
     }
@@ -788,6 +789,21 @@ impl Filesystem {
         let inner_writer = InnerWriter { writer, written };
         let mut opened_file_writer = self.opened_files_writer.lock().unwrap();
         opened_file_writer.insert(path.to_string(), inner_writer);
+
+        Ok(())
+    }
+
+    async fn do_release_writer(&self, path: &str) -> Result<()> {
+        let mut opened_file_writer = self.opened_files_writer.lock().unwrap();
+        let inner_writer = opened_file_writer
+            .get_mut(path)
+            .ok_or(Error::from(libc::EIO))?;
+        inner_writer
+            .writer
+            .close()
+            .await
+            .map_err(|err| Error::from(err))?;
+        opened_file_writer.remove(path);
 
         Ok(())
     }

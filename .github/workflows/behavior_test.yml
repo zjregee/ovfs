@@ -18,8 +18,8 @@ jobs:
 
       - name: Run Behavior Test
         env:
-          KIND: fs
-          ROOT: ${{ github.workspace }}/.github/scripts
+          OVFS_SOCKET_PATH: /tmp/vfsd.sock
+          OVFS_BACKEND: fs://?root=${{ github.workspace }}/.github/scripts
         run: |
           cargo run --manifest-path ../../Cargo.toml  --release &
           chmod +x ./install_and_run_vm.sh

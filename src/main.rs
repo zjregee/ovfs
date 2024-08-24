@@ -1,15 +1,15 @@
-use std::env;
 use std::io;
 use std::process::exit;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use clap::Parser;
 use log::error;
-use log::info;
 use log::warn;
-use opendal::services::Fs;
-use opendal::services::S3;
 use opendal::Operator;
+use opendal::Scheme;
+use url::Url;
 use vhost::vhost_user::message::VhostUserProtocolFeatures;
 use vhost::vhost_user::message::VhostUserVirtioFeatures;
 use vhost::vhost_user::Backend;
@@ -238,40 +238,38 @@ impl VhostUserBackend for VhostUserFsBackend {
     }
 }
 
-fn init_operator() -> Operator {
-    let kind = env::var("KIND").unwrap();
-    if kind == "fs" {
-        let root = env::var("ROOT").unwrap();
-        let mut builder = Fs::default();
-        builder.root(&root);
-        Operator::new(builder)
-            .expect("failed to build operator")
-            .finish()
-    } else {
-        let bucket = env::var("BUCKET").unwrap();
-        let endpoint = env::var("ENDPOINT").unwrap();
-        let access_key_id = env::var("ACCESS_KEY_ID").unwrap();
-        let secret_access_key = env::var("SECRET_ACCESS_KEY").unwrap();
-        let region = env::var("REGION").unwrap();
-        let mut builder = S3::default();
-        builder.bucket(&bucket);
-        builder.endpoint(&endpoint);
-        builder.access_key_id(&access_key_id);
-        builder.secret_access_key(&secret_access_key);
-        builder.region(&region);
-        Operator::new(builder)
-            .expect("failed to build operator")
-            .finish()
-    }
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Config {
+    #[arg(env = "OVFS_SOCKET_PATH", index = 1)]
+    socket_path: String,
+
+    #[arg(env = "OVFS_BACKEND", index = 2)]
+    backend: Url,
 }
 
 fn main() {
     env_logger::init();
 
-    let socket = "/tmp/vfsd.sock";
-    let operator = init_operator();
-    let listener = Listener::new(socket, true).unwrap();
-    let fs = Filesystem::new(operator);
+    let cfg = Config::parse();
+    if cfg.backend.has_host() {
+        log::warn!("backend host will be ignored");
+    }
+
+    let scheme_str = cfg.backend.scheme();
+    let op_args = cfg.backend.query_pairs().into_owned();
+
+    let scheme = match Scheme::from_str(scheme_str) {
+        Ok(Scheme::Custom(_)) | Err(_) => {
+            log::error!("invalid backend scheme: {}", scheme_str);
+            return;
+        }
+        Ok(s) => s,
+    };
+    let backend = Operator::via_iter(scheme, op_args).unwrap();
+
+    let listener = Listener::new(cfg.socket_path, true).unwrap();
+    let fs = Filesystem::new(backend);
     let fs_backend = Arc::new(VhostUserFsBackend::new(fs).unwrap());
 
     let mut daemon = VhostUserDaemon::new(
@@ -282,15 +280,13 @@ fn main() {
     .unwrap();
 
     if let Err(e) = daemon.start(listener) {
-        error!("[Main] failed to start daemon: {:?}", e);
+        error!("failed to start daemon: {:?}", e);
         exit(1);
     }
-    info!("[Main] daemon started");
 
     if let Err(e) = daemon.wait() {
-        error!("[Main] failed to wait for daemon: {:?}", e);
+        error!("failed to wait for daemon: {:?}", e);
     }
-    info!("[Main] daemon shutdown");
 
     let kill_event_fd = fs_backend
         .thread
@@ -300,7 +296,6 @@ fn main() {
         .try_clone()
         .unwrap();
     if let Err(e) = kill_event_fd.write(1) {
-        error!("[Main] failed to shutdown worker thread: {:?}", e);
+        error!("failed to shutdown worker thread: {:?}", e);
     }
-    info!("[Main] worker thread shutdown");
 }
