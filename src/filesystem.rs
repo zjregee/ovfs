@@ -31,6 +31,7 @@ const DEFAULT_UID: u32 = 1000;
 const DEFAULT_DIR_NLINK: u32 = 2;
 const DEFAULT_FILE_NLINK: u32 = 1;
 const DEFAULT_MODE: u32 = 0o755;
+const DEFAULT_ROOT_DIR_INODE: u64 = 1;
 const DEAFULT_DIR_TYPE_IN_DIR_ENTRY: u32 = 4;
 const DEAFULT_FILE_TYPE_IN_DIR_ENTRY: u32 = 8;
 const DIRENT_PADDING: [u8; 8] = [0; 8];
@@ -129,8 +130,8 @@ impl Filesystem {
                 Opcode::Open => self.open(in_header, r, w),
                 Opcode::Read => self.read(in_header, r, w),
                 Opcode::Write => self.write(in_header, r, w),
-                Opcode::Mkdir => Filesystem::reply_error(in_header.unique, w, libc::ENOSYS),
-                Opcode::Rmdir => Filesystem::reply_error(in_header.unique, w, libc::ENOSYS),
+                Opcode::Mkdir => self.mkdir(in_header, r, w),
+                Opcode::Rmdir => self.rmdir(in_header, r, w),
                 Opcode::Releasedir => self.releasedir(in_header, r, w),
                 Opcode::Fsyncdir => self.fsyncdir(in_header, r, w),
                 Opcode::Opendir => self.opendir(in_header, r, w),
@@ -155,7 +156,7 @@ impl Filesystem {
         }
 
         let mut attr = OpenedFile::new(FileType::Dir, "/");
-        attr.metadata.ino = 1;
+        attr.metadata.ino = DEFAULT_ROOT_DIR_INODE;
         self.opened_files
             .insert(attr.clone())
             .expect("failed to allocate inode");
@@ -163,7 +164,7 @@ impl Filesystem {
             .insert(attr.clone())
             .expect("failed to allocate inode");
         let mut opened_files_map = self.opened_files_map.lock().unwrap();
-        opened_files_map.insert("/".to_string(), 1);
+        opened_files_map.insert("/".to_string(), DEFAULT_ROOT_DIR_INODE);
 
         let out = InitOut {
             major: KERNEL_VERSION,
@@ -256,18 +257,14 @@ impl Filesystem {
     }
 
     fn create(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
-        let CreateIn { flags, .. } = r.read_obj().map_err(|e| {
-            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
+        let CreateIn { flags, .. } = r.read_obj().map_err(|_| Error::from(libc::EIO))?;
 
         let name_len = in_header.len as usize - size_of::<InHeader>() - size_of::<CreateIn>();
         let mut buf = vec![0; name_len];
-        r.read_exact(&mut buf).map_err(|e| {
-            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
-        })?;
+        r.read_exact(&mut buf).map_err(|_| Error::from(libc::EIO))?;
         let name = match Filesystem::bytes_to_str(buf.as_ref()) {
             Ok(name) => name,
-            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
+            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::EIO),
         };
 
         debug!(
@@ -322,12 +319,10 @@ impl Filesystem {
     fn unlink(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
         let name_len = in_header.len as usize - size_of::<InHeader>();
         let mut buf = vec![0; name_len];
-        r.read_exact(&mut buf).map_err(|e| {
-            new_unexpected_error("failed to decode protocol messages", Some(e.into()))
-        })?;
+        r.read_exact(&mut buf).map_err(|_| Error::from(libc::EIO))?;
         let name = match Filesystem::bytes_to_str(buf.as_ref()) {
             Ok(name) => name,
-            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
+            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::EIO),
         };
 
         debug!("unlink: parent inode={} name={}", in_header.nodeid, name);
@@ -383,9 +378,7 @@ impl Filesystem {
     fn open(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
         debug!("open: inode={}", in_header.nodeid);
 
-        let OpenIn { flags, .. } = r.read_obj().map_err(|e| {
-            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
+        let OpenIn { flags, .. } = r.read_obj().map_err(|_| Error::from(libc::EIO))?;
 
         let path = match self
             .opened_files
@@ -408,6 +401,8 @@ impl Filesystem {
     }
 
     fn read(&self, in_header: InHeader, mut r: Reader, mut w: Writer) -> Result<usize> {
+        let ReadIn { offset, size, .. } = r.read_obj().map_err(|_| Error::from(libc::EIO))?;
+
         let path = match self
             .opened_files
             .get(in_header.nodeid as usize)
@@ -417,10 +412,6 @@ impl Filesystem {
             None => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
         };
 
-        let ReadIn { offset, size, .. } = r.read_obj().map_err(|e| {
-            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
-
         let data = match self.rt.block_on(self.do_read(&path, offset)) {
             Ok(data) => data,
             Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
@@ -429,9 +420,9 @@ impl Filesystem {
         let buffer = BufferWrapper::new(data);
 
         let mut data_writer = w.split_at(size_of::<OutHeader>()).unwrap();
-        data_writer.write_from_at(&buffer, len).map_err(|e| {
-            new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
-        })?;
+        data_writer
+            .write_from_at(&buffer, len)
+            .map_err(|_| Error::from(libc::EIO))?;
 
         debug!(
             "read: inode={} offset={} size={} len={}",
@@ -443,14 +434,18 @@ impl Filesystem {
             error: 0,
             unique: in_header.unique,
         };
-        w.write_all(out.as_slice()).map_err(|e| {
-            new_vhost_user_fs_error("failed to encode protocol messages", Some(e.into()))
-        })?;
+        w.write_all(out.as_slice())
+            .map_err(|_| Error::from(libc::EIO))?;
         Ok(out.len as usize)
     }
 
     fn write(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
-        debug!("write: inode={}", in_header.nodeid);
+        let WriteIn { offset, size, .. } = r.read_obj().map_err(|_| Error::from(libc::EIO))?;
+
+        debug!(
+            "write: inode={} offset={} size={}",
+            in_header.nodeid, offset, size
+        );
 
         let path = match self
             .opened_files
@@ -458,17 +453,12 @@ impl Filesystem {
             .map(|f| f.path.clone())
         {
             Some(path) => path,
-            None => return Filesystem::reply_error(in_header.unique, w, libc::EIO),
+            None => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
         };
 
-        let WriteIn { offset, size, .. } = r.read_obj().map_err(|e| {
-            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
-
         let buffer = BufferWrapper::new(Buffer::new());
-        r.read_to_at(&buffer, size as usize).map_err(|e| {
-            new_vhost_user_fs_error("failed to decode protocol messages", Some(e.into()))
-        })?;
+        r.read_to_at(&buffer, size as usize)
+            .map_err(|_| Error::from(libc::EIO))?;
         let buffer = buffer.get_buffer();
 
         match self.rt.block_on(self.do_write(&path, offset, buffer)) {
@@ -481,6 +471,85 @@ impl Filesystem {
             ..Default::default()
         };
         Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn mkdir(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let MkdirIn { .. } = r.read_obj().map_err(|_| Error::from(libc::EIO))?;
+
+        let name_len = in_header.len as usize - size_of::<InHeader>() - size_of::<MkdirIn>();
+        let mut buf = vec![0; name_len];
+        r.read_exact(&mut buf).map_err(|_| Error::from(libc::EIO))?;
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::EIO),
+        };
+
+        debug!("mkdir: parent inode={} name={}", in_header.nodeid, name);
+
+        let parent_path = match self
+            .opened_files
+            .get(in_header.nodeid as usize)
+            .map(|f| f.path.clone())
+        {
+            Some(path) => path,
+            None => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
+        };
+
+        let path = format!("{}/{}", parent_path, name);
+        let mut attr = OpenedFile::new(FileType::Dir, &path);
+        let inode = self
+            .opened_files
+            .insert(attr.clone())
+            .expect("failed to allocate inode");
+        attr.metadata.ino = inode as u64;
+        let mut opened_files_map = self.opened_files_map.lock().unwrap();
+        opened_files_map.insert(path.to_string(), inode as u64);
+
+        if self.rt.block_on(self.do_create_dir(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w, libc::ENOENT);
+        }
+
+        let out = EntryOut {
+            nodeid: attr.metadata.ino,
+            entry_valid: DEFAULT_TTL.as_secs(),
+            attr_valid: DEFAULT_TTL.as_secs(),
+            entry_valid_nsec: DEFAULT_TTL.subsec_nanos(),
+            attr_valid_nsec: DEFAULT_TTL.subsec_nanos(),
+            attr: attr.metadata,
+            ..Default::default()
+        };
+        Filesystem::reply_ok(Some(out), None, in_header.unique, w)
+    }
+
+    fn rmdir(&self, in_header: InHeader, mut r: Reader, w: Writer) -> Result<usize> {
+        let name_len = in_header.len as usize - size_of::<InHeader>();
+        let mut buf = vec![0; name_len];
+        r.read_exact(&mut buf).map_err(|_| Error::from(libc::EIO))?;
+        let name = match Filesystem::bytes_to_str(buf.as_ref()) {
+            Ok(name) => name,
+            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::EIO),
+        };
+
+        debug!("rmdir: parent inode={} name={}", in_header.nodeid, name);
+
+        let parent_path = match self
+            .opened_files
+            .get(in_header.nodeid as usize)
+            .map(|f| f.path.clone())
+        {
+            Some(path) => path,
+            None => return Filesystem::reply_error(in_header.unique, w, libc::ENOENT),
+        };
+
+        let path = format!("{}/{}", parent_path, name);
+        if self.rt.block_on(self.do_delete(&path)).is_err() {
+            return Filesystem::reply_error(in_header.unique, w, libc::ENOENT);
+        }
+
+        let mut opened_files_map = self.opened_files_map.lock().unwrap();
+        opened_files_map.remove(&path);
+
+        Filesystem::reply_ok(None::<u8>, None, in_header.unique, w)
     }
 
     fn releasedir(&self, in_header: InHeader, _r: Reader, w: Writer) -> Result<usize> {
@@ -552,21 +621,6 @@ impl Filesystem {
         }
 
         let mut total_written = 0;
-
-        let entry = DirEntry {
-            ino: in_header.nodeid,
-            off: 1,
-            name: ".".to_string(),
-            type_: DEAFULT_DIR_TYPE_IN_DIR_ENTRY,
-        };
-
-        match Filesystem::reply_add_dir_entry(&mut data_writer, entry) {
-            Ok(len) => {
-                total_written += len;
-            }
-            Err(_) => return Filesystem::reply_error(in_header.unique, w, libc::EIO),
-        };
-
         for entry in entries {
             match Filesystem::reply_add_dir_entry(&mut data_writer, entry) {
                 Ok(len) => {
@@ -763,12 +817,9 @@ impl Filesystem {
         let mut opened_file_writer = self.opened_files_writer.lock().unwrap();
         let inner_writer = opened_file_writer
             .get_mut(path)
-            .ok_or(new_unexpected_error(
-                "one or more parameters are missing",
-                None,
-            ))?;
+            .ok_or(Error::from(libc::EIO))?;
         if offset != inner_writer.written {
-            return Err(Error::from(libc::EINVAL));
+            return Err(Error::from(libc::EIO));
         }
         inner_writer
             .writer
@@ -780,10 +831,30 @@ impl Filesystem {
         Ok(len)
     }
 
+    async fn do_create_dir(&self, path: &str) -> Result<()> {
+        let path = if !path.ends_with('/') {
+            format!("{}/", path)
+        } else {
+            path.to_string()
+        };
+        self.core
+            .create_dir(&path)
+            .await
+            .map_err(|err| Error::from(err))?;
+
+        Ok(())
+    }
+
     async fn do_readdir(&self, path: &str) -> Result<Vec<DirEntry>> {
+        let path = if !path.ends_with('/') {
+            format!("{}/", path)
+        } else {
+            path.to_string()
+        };
+
         let entries = self
             .core
-            .list(path)
+            .list(&path)
             .await
             .map_err(|err| Error::from(err))?
             .into_iter()
@@ -794,10 +865,11 @@ impl Filesystem {
                     opendal::EntryMode::DIR => FileType::Dir,
                     _ => FileType::File,
                 };
-                let mut attr = OpenedFile::new(file_type, path);
-                attr.metadata.size = metadata.content_length();
 
                 let path = format!("{}/{}", path, entry.name());
+                let mut attr = OpenedFile::new(file_type, &path);
+                attr.metadata.size = metadata.content_length();
+
                 let mut opened_files_map = self.opened_files_map.lock().unwrap();
                 let inode = if let Some(inode) = opened_files_map.get(&path) {
                     *inode
@@ -815,12 +887,18 @@ impl Filesystem {
                     _ => DEAFULT_FILE_TYPE_IN_DIR_ENTRY,
                 };
 
-                DirEntry {
+                let mut name = entry.name().to_string();
+                if name.ends_with('/') {
+                    name.truncate(name.len() - 1);
+                }
+
+                let entry = DirEntry {
                     ino: inode,
                     off: i as u64 + 1,
-                    name: entry.name().to_string(),
+                    name,
                     type_,
-                }
+                };
+                entry
             })
             .collect();
 

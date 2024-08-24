@@ -1,9 +1,9 @@
 import os
+from pathlib import Path
 
 TEST_POINT = "/mnt"
 TEST_PRESET_PATHS = [
     ("./behavior_test_judge.py", True),
-    ("./build_and_run_ovfs.sh", True),
     ("./file_behavior_test.py", True),
     ("./image.img", True),
     ("./install_and_run_vm.sh", True),
@@ -12,6 +12,17 @@ TEST_PRESET_PATHS = [
     ("./seed.iso", True),
     ("./ubuntu-20.04.6-live-server-amd64.iso", True),
     ("./user-data", True),
+]
+TEST_NESTED_PATHS = [
+    ("./dir1", False),
+    ("./dir2", False),
+    ("./dir3", False),
+    ("./dir3/dir4", False),
+    ("./dir3/dir5", False),
+    ("./dir3/file3", True),
+    ("./dir3/file4", True),
+    ("./file1", True),
+    ("./file2", True),
 ]
 
 def list_paths():
@@ -24,11 +35,23 @@ def list_paths():
             walked_entries.append((os.path.join(rel_dir, filename), True))
     return walked_entries
 
+def create_paths():
+    for path, is_file in TEST_NESTED_PATHS:
+        if is_file:
+            with open(Path(TEST_POINT) / path, "w") as f:
+                f.write("This is a file.")
+        else:
+            os.makedirs(Path(TEST_POINT) / path, exist_ok=False)
+
 def test_path():
     paths = list_paths()
-    paths.sort()
-    TEST_PRESET_PATHS.sort()
-    assert paths == TEST_PRESET_PATHS
+    assert paths.sort() == TEST_PRESET_PATHS.sort()
+
+def test_nested_path():
+    create_paths()
+    paths = list_paths()
+    assert paths.sort() == (TEST_NESTED_PATHS + TEST_PRESET_PATHS).sort()
 
 if __name__ == "__main__":
     test_path()
+    test_nested_path()

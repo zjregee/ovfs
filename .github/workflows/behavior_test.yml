@@ -17,11 +17,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Behavior Test
+        env:
+          KIND: fs
+          ROOT: .github/scripts
         run: |
-          chmod +x ./build_and_run_ovfs.sh
+          cargo run --manifest-path ../../Cargo.toml  --release &
           chmod +x ./install_and_run_vm.sh
-          nohup ./build_and_run_ovfs.sh &
-          nohup ./install_and_run_vm.sh &
+          ./install_and_run_vm.sh &
           pip install paramiko
           python behavior_test_judge.py
         working-directory: .github/scripts
