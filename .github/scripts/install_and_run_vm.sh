@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 sudo apt-get update
-sudo apt-get install cloud-image-utils qemu -y
+sudo apt-get install cloud-image-utils qemu qemu-kvm -y
 
 cloud-localds seed.iso user-data meta-data
 

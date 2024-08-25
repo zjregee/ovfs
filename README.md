@@ -14,7 +14,7 @@ The following components are required:
 ### Install QEMU and VMs
 
 ```shell
-$ sudo apt-get install qemu -y # debian/ubuntu
+$ sudo apt-get install qemu qemu-kvm -y # debian/ubuntu
 ```
 
 Download and install the VM, taking Ubuntu as an example:
@@ -61,7 +61,7 @@ guest# sudo mount -t virtiofs <fs-tag> <mount-point>
 
 > Notes: For more examples or some useful Ubuntu unattended autoinstall scripts, see the scripts [here](./scripts/).
 
-## Periodic Reports During GSoC 2024 And Acknowledgements
+## Periodic Reports During GSoC 2024 and Acknowledgements
 
 The following are reports from the implementation phase, all synchronized in the [OpenDAL dev mailing list](https://lists.apache.org/list.html?dev@opendal.apache.org).
 - [05.12-05.19](./docs/reports/05.12-05.19.md)
