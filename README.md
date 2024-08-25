@@ -50,7 +50,7 @@ host# sudo qemu-system-x86_64 --enable-kvm -smp 2 \
     -m 4G -object memory-backend-file,id=mem,size=4G,mem-path=/dev/shm,share=on -numa node,memdev=mem \
     -chardev socket,id=char0,path=<socket-path> -device vhost-user-fs-pci,queue-size=1024,chardev=char0,tag=<fs-tag> \
     -drive file=image.img,format=raw,cache=none,if=virtio \
-    -nographic -boot c
+    -boot c
 ```
 
 Mount a shared directory in the VM:
@@ -63,7 +63,7 @@ For more examples, please refer to the test scripts in github actions of this re
 
 ## Periodic Reports During GSoC 2024 And Acknowledgements
 
-The following are progress reports from project implementation phase, all of which have been synchronized in the [OpenDAL dev maling list](https://lists.apache.org/list.html?dev@opendal.apache.org). We extend our gratitude to the [virtiofsd](https://gitlab.com/virtio-fs) project for its contributions; OVFS primarily references the implementation of virtiofsd v1.10.0. Special thanks to [Xuanwo](https://github.com/Xuanwo) and [Manjusaka](https://github.com/Zheaoli) for their guidance throughout the project.
+The following are reports from the implementation phase, all synchronized in the [OpenDAL dev mailing list](https://lists.apache.org/list.html?dev@opendal.apache.org).
 
 - [05.12-05.19](./docs/reports/05.12-05.19.md)
 - [05.20-06.02](./docs/reports/05.20-06.02.md)
@@ -71,3 +71,5 @@ The following are progress reports from project implementation phase, all of whi
 - [06.28-07.22](./docs/reports/06.28-07.22.md)
 - [07.23-08.04](./docs/reports/07.23-08.04.md)
 - [08.05-08.20](./docs/reports/08.05-08.20.md)
+
+ We extend our gratitude to the [virtiofsd](https://gitlab.com/virtio-fs/virtiofsd) project for its contributions; OVFS primarily references the implementation of virtiofsd v1.10.0. Special thanks to [Xuanwo](https://github.com/Xuanwo) and [Manjusaka](https://github.com/Zheaoli) for their guidance throughout the project.
