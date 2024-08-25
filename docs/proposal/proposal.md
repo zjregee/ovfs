@@ -4,7 +4,6 @@
 
 ## 1 Basic Information
 
-- **Name:** Runjie Yu
 - **Email:** zjregee@gmail.com
 - **Github:** https://github.com/zjregee
 - **Location:** Wuhan, China (GMT+8:00)
@@ -19,13 +18,7 @@
 - **Project Difficulty:** Major
 - **Project Size:** Large, ~350 hours
 
-## 3 About Me
-
-I am Runjie Yu, a first-year master's student majoring in Computer Science and Technology at Huazhong University of Science and Technology in China. I also earned my undergraduate degree from the same university. I have a strong passion for programming and have experience in various programming languages, including Rust, Go, C++, Swift, and more. My primary interest lies in studying system development, particularly in the areas of file systems and databases, and I am eager to achieve meaningful research results. I have completed internships at Tencent and ByteDance. Coding is not merely a skill for me, I preceive it as a long-term career.
-
-I believe OpenDAL is an outstanding Apache project. It provides a unified, efficient, and cost-effective data access interface for numerous storage services. This project can seamlessly integrate into varius systems as a storage layer, holding significant potential and value in the prevailing era of cloud-native technologies. I am determined to contribute my best efforts to its development through continuous work.
-
-## 4 Project Abstract
+## 3 Project Abstract
 
 Virtio is an open standard designed to enhance I/O performance between virtual machines (VMs) and host systems in virtualized environments. VirtioFS is an extension of the Virtio standard specifically crafted for file system sharing between VMs and the host. This is particularly beneficial in scenarios where seamless access to shared files and data between VMs and the host is essential. VirtioFS has been widely adopted in virtualization technologies such as QEMU and Kata Container.
 
@@ -33,11 +26,11 @@ Apache OpenDAL is a data access layer that allows users to easily and efficientl
 
 Through this project, VMs can access numerous data services through the file system interface with the assistance of the OpenDAL service daemon deployed on the host, all without their awareness. It ensures the efficiency of file system reading and writing in VMs through VirtioFS support. This storage-system-as-a-service approach conceals the details of the distributed storage system from VMs. This ensures the security of storage services, as VMs do not need to be aware of the information, configuration and permission credentials of the accessed storage service. Additionally, it enables the utilization of a new backend storage system without reconfiguring all VMs.
 
-## 5 Project Detailed Description
+## 4 Project Detailed Description
 
 This chapter serves as an introduction to the overall structure of the project, outlining the design ideas and principles of critical components. It covers the OVFS architecture, interaction principles, design philosophy, file system operations based on various storage backend, cache pool design, configuration support, potential usage scenarios of OVFS, and the expected file system interface support.
 
-### 5.1 The Architecture of OVFS
+### 4.1 The Architecture of OVFS
 
 <img src="./media/architecture.png" alt="OVFS Architecture" style="zoom:50%;" />
 
@@ -49,7 +42,7 @@ The complete OVFS architecture consists of three crucial components:
 - A hypervisor that implements the VirtioFS Virtio device specification, such as QEMU. The hypervisor needs to adhere to the VirtioFS Virtio device specification, supporting devices used during the operation of VMs, managing the file system operations of the VMs, and delegating these operations to a specific vhost-user device backend implementation.
 - A vhost-user backend implementation, namely OVFS. This is a crucial aspect that requires particular attention in this project. This backend is a file system daemon running on the host side, responsible for handling all file system operations from VMs to access the shared directory. virtiofsd offers a practical example of a vhost-user backend implementation, based on pure Rust, forwarding VMs' file system requests to the local file system on the host side.
 
-### 5.2 How OVFS Interacts With VMs and Hypervisor
+### 4.2 How OVFS Interacts With VMs and Hypervisor
 
 The Virtio specification defines device emulation and communication between VMs and the hypervisor. Among these, the virtio queue is a core component of the communication mechanism in the Virtio specification and a key mechanism for achieving efficient communication between VMs and the hypervisor. The virtio queue is essentially a shared memory area called vring between VMs and the hypervisor, through which the guest sends and receives data to the host.
 
@@ -59,7 +52,7 @@ In terms of specific implementation, the vm-memory crate, virtio-queue crate and
 
 The vm-memory crate provides encapsulation of VMs memory and achieves decoupling of memory usage. Through the vm-memory crate, OVFS can access relevant memory without knowing the implementation details of the VMs memory. Two formats of virtio queues are defined in the Virtio specification: split virtio queue and packed virtio queue. The virtio-queue crate provides support for the split virtio queue. Through the DescriptorChain package provided by the virtio-queue crate, OVFS can parse the corresponding virtio queue structure from the original vring data. The vhost-user-backend crate provides a way to start and stop the file system demon, as well as encapsulation of vring access. OVFS implements the vhost-user backend service based on the framework provided by the vhost-user-backend crate and implements the event loop for the file system process to handle requests through this crate.
 
-### 5.3 OVFS Design Philosophy
+### 4.3 OVFS Design Philosophy
 
 In this section, we will present the design philosophy of the OVFS project. The concepts introduced here will permeate throughout the entire design and implementation of OVFS, fully manifesting in other sections of the proposal.
 
@@ -85,7 +78,7 @@ OVFS must offer users a user-friendly operating interface. This entails ensuring
 - OVFS is deployed using a formatted configuration file format. The operation and maintenance of OVFS only require a TOML file with clear content.
 - Offer clear documentation, including usage and deployment instructions, along with relevant scenario descriptions.
 
-### 5.4 File System Operations Based On Various Storage Backend
+### 4.4 File System Operations Based On Various Storage Backend
 
 OVFS implements a file system model based on OpenDAL. A file system model that provides POSIX semantics should include access to file data and metadata, maintenance of directory trees (hierarchical relationships between files), and additional POSIX interfaces.
 
@@ -117,7 +110,7 @@ Unlike distributed object storage systems, distributed file systems already offe
 
 While OVFS strives to implement a unified file system access interface for various storage system backends, users still need to be aware of its limitations and potential differences. OVFS supports a range of file system interfaces, but this doesn't imply POSIX standard compliance. OVFS cannot support some file system calls specified in the POSIX standard.
 
-### 5.5 Multi Granular Object Size Cache Pool
+### 4.5 Multi Granular Object Size Cache Pool
 
 In order to improve data read and write performance and avoid the significant overhead caused by repeated transmission of hot data between the storage system and the host, OVFS needs to build a data cache in the memory on the host side.
 
@@ -143,7 +136,7 @@ The VirtioFS protocol extends the DAX window experimental features based on the 
 
 By using the mmap and memfd mechanisms, OVFS can use the data in the cache to create an anonymous memory mapping area and share this memory mapping with VMs to implement the DAX Window. The best performance is achieved when the file contents are fully mapped, eliminating the need for file I/O communication with OVFS. It is possible to use a small DAX window, but this incurs more memory map setup/removal overhead.
 
-### 5.6 Flexible Configuration Support
+### 4.6 Flexible Configuration Support
 
 #### Running QEMU With OVFS
 
@@ -193,14 +186,14 @@ secret_access_key = "<secret_access_key>"
 
 OVFS can achieve hot reloading by monitoring changes in the configuration file. This approach allows OVFS to avoid restarting the entire service when modifying certain storage system access configurations and mounting conditions.
 
-### 5.7 Potential Usage Scenarios
+### 4.7 Potential Usage Scenarios
 
 In this section, we list some potential OVFS usage scenarios and application areas through the detailed description of the OVFS project in the proposal. It's worth mentioning that as the project progresses, more application scenarios and areas of advantage may expand, leading to a deeper understanding of the positioning of the OVFS project.
 
 - Unified data management basic software within distributed clusters.
 - The OVFS project could prove highly beneficial for large-scale data analysis applications and machine learning training projects. It offers a means for applications within VM clusters to read and write data, models, checkpoints, and logs through common file system interfaces across various distributed storage systems.
 
-### 5.8 Expected File System Interface Support
+### 4.8 Expected File System Interface Support
 
 Finally, the table below lists the expected file system interface support to be provided by OVFS, along with the corresponding types of distributed storage systems used by OpenDAL.
 
@@ -223,14 +216,12 @@ It is worth mentioning that although storage systems are simply divided into thr
 
 Since the data volume of an individual file may be substantial, contradicting the design of key-value storage, we do not intend to include support for key-value Storage in this project. In addition, the complex permission system control of Linux is not within the scope of this project. Users can restrict file system access behavior based on the configuration of storage system access permissions in the OVFS configuration file.
 
-## 6 Deliverables
+## 5 Deliverables
 
 This chapter describes the items that the OVFS project needs to deliver during the implementation cycle of GSoC 2024.
 
 1. A code repository that implements the functions described in the project details. The services implemented by OVFS in the code repository need to meet the following requirements:
-
    - VirtioFS implementation, well integrated with VMs and QEMU, able to correctly handle VMs read and write requests to the file system.
-
    - Supports the use of distributed object storage systems and distributed file systems as storage backends, and provides complete and correct support for at least one specific storage service type for each storage system type. S3 can be used as the target for object storage systems, and local file systems can be used as the target for file systems.
    - Supports related configurations of various storage systems. Users can configure storage system access and use according to actual needs. When an error occurs, users can use the configuration file to restart services.
 2. Form an OVFS related test suite. Testing about the project should consist of two parts:
@@ -239,7 +230,7 @@ This chapter describes the items that the OVFS project needs to deliver during t
 3. A performance test report of OVFS. The report needs to perform basic metadata operations, data reading and writing performance tests on the VMs mounted with OVFS, and summarize the performance of OVFS through the test results. Reports can be based on file system performance testing tools such as fio, sysbench and mdtest, and compared with virtiofsd when necessary.
 4. Documentation on the introduction and use of OVFS, and promote the inclusion of OVFS documentation into the official OpenDAL documentation when the GSoC project is completed.
 
-## 7 Project Timeline Schedule
+## 6 Project Timeline Schedule
 
 This chapter provides an overview of the planning for the GSoC project. To ensure smooth progress and quality assurance, I've segmented the entire project lifecycle into several phases: planning and preparation phase, development phase, feedback and optimization phase, documentation improvements phase, and maintenance phase.
 
@@ -294,15 +285,7 @@ The specific plans and key time points of GSoC are outlined in the table below, 
 |    Week 12     |   08.12~08.18   |                      Maintenance Phase                       |
 | **Final Week** | **08.19~08.26** |                **submit final work product**                 |
 
-## 8 Why Me And Why Do I Wish To Take Part In GSoC 2024
-
-I have many years of computer learning and programming experience, as well as many years of experience using the Rust language. I am familiar with the concepts related to file systems and have systematically studied the latest papers in the field of file systems. I have file system development experience. I developed a fully functional journaling flash file system using Rust, and optimized and tested the file system through tools such as perf, sysbench, and mdtest. I did some research and practice on file system metadata optimization in school. I have full confidence in realizing the OVFS project under the guidance of my mentors.
-
-In the early stages of project application, I understood and learned the architecture and principles of OpenDAL by solving problems. Contact and communicate with the mentor through Discord and email to ensure the rationality of the proposal and OVFS project development. I make sure to have enough time to complete the GSoC project during project development. I plan to spend about 30 to 40 hours a week developing and enhancing the project. In addition, I will communicate with my mentor every week about the progress and challenges encountered during the project development process.
-
-I very much hope to have the opportunity to participate in the GSoC 2024 project and implement the ideas and development of OVFS. I think GSoC is a very good learning opportunity and platform. By participating in this event, I can deeply participate in community activities and make my own contribution to the Apache OpenDAL community. I hope this opportunity can be the beginning of my participation in and contribution to the open source community. I also hope that I can participate more actively in the open source community and contribute my own strength in the future.
-
-## 9 Contributions For OpenDAL
+## 7 Contributions For OpenDAL
 
 The chapter delineates the PRs that have been merged into the Apache OpenDAL project. As a newcomer, my current involvement in the OpenDAL community is limited. I aspire to persist in contributing and aiding the advancement of the OpenDAL community in the future.
 
@@ -346,7 +329,7 @@ This PR fixes a link pointing error in the official website.
 
 This PR updates the description of the credential field and credential_path field in the GCS services configuration, making the configuration of these two fields clearer for users.
 
-## 10 Reference
+## 8 Reference
 
 - https://opendal.apache.org/
 - https://github.com/apache/opendal
