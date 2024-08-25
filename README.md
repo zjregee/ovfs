@@ -14,7 +14,7 @@ The following components are required:
 ### Install QEMU and VMs
 
 ```shell
-$ sudo apt-get -y qemu # debian/ubuntu
+$ sudo apt-get install qemu -y # debian/ubuntu
 ```
 
 Download and install the VM, taking Ubuntu as an example:
@@ -25,7 +25,7 @@ $ truncate -s 10G image.img
 $ sudo qemu-system-x86_64 -enable-kvm -smp 2 -m 4G \
     -cdrom ubuntu-20.04.6-live-server-amd64.iso \
     -drive file=image.img,format=raw,cache=none,if=virtio \
-    -boot d
+    -no-reboot -boot d
 ```
 
 ### Mount shared directory on VMs
@@ -40,7 +40,7 @@ host# cargo run --release <socket-path> <backend-url>
 
 ```markdown
 - fs://?root=<path>
-- s3://?root=<path>&bucket=<bucket>&endpoint=<endpoint>&region=<region>&access_key_id=<access-key-id>&secret_access_key=<secret-access-key>
+- s3://?bucket=<bucket>&endpoint=<endpoint>&access_key_id=<access-key-id>&secret_access_key=<secret-access-key>&region=<region>
 ```
 
 Run the VM through QEMU and create a VirtioFS device:
@@ -59,12 +59,11 @@ Mount a shared directory in the VM:
 guest# sudo mount -t virtiofs <fs-tag> <mount-point>
 ```
 
-For more examples, please refer to the test scripts in github actions of this repository.
+> Notes: For more examples or some useful Ubuntu unattended autoinstall scripts, see the scripts [here](./scripts/).
 
 ## Periodic Reports During GSoC 2024 And Acknowledgements
 
 The following are reports from the implementation phase, all synchronized in the [OpenDAL dev mailing list](https://lists.apache.org/list.html?dev@opendal.apache.org).
-
 - [05.12-05.19](./docs/reports/05.12-05.19.md)
 - [05.20-06.02](./docs/reports/05.20-06.02.md)
 - [06.02-06.27](./docs/reports/06.02-06.27.md)
